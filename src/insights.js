@@ -296,6 +296,46 @@ function compareToPastSelfCallout(milestone, diffEntries){
   return parts.join(' ');
 }
 
+/* ---------- 2.7: Weekly coach's note ---------- */
+const WEEKLY_NOTE_INTERVAL_DAYS = 7;
+
+// Has enough time passed since the last weekly checkpoint to roll it
+// forward? True with no snapshots yet too, so a first checkpoint gets
+// taken immediately (as a baseline for the next comparison, not itself
+// something to show a note about).
+function shouldTakeWeeklySnapshot(weeklySnapshots, nowMs){
+  const snapshots = weeklySnapshots || [];
+  if(snapshots.length === 0) return true;
+  const last = snapshots[snapshots.length - 1];
+  const daysSince = (nowMs - new Date(last.date).getTime()) / (1000 * 60 * 60 * 24);
+  return daysSince >= WEEKLY_NOTE_INTERVAL_DAYS;
+}
+
+// Fully templated (no LLM): rating delta, most-improved tag (biggest
+// week-over-week drop in frequency), most-stubborn tag (highest
+// persisting frequency — must have already existed in the previous
+// snapshot AND not have improved), and a focus suggestion pulled from
+// Layer 2.1's leverage ranking. Compares the most recent stored weekly
+// checkpoint against the CURRENT live profile state (not the next
+// checkpoint, which may not exist yet) — so this reads as live progress
+// since the last checkpoint, not a once-a-week toast that vanishes.
+function weeklyCoachNote(previousSnapshot, currentRating, currentMistakeTags, currentMistakeCost){
+  if(!previousSnapshot) return null;
+  const ratingDelta = (currentRating || 0) - (previousSnapshot.rating || 0);
+  const diff = diffMistakeTags(currentMistakeTags, previousSnapshot.mistakeTags);
+
+  const improved = diff.filter(e => e.delta < 0).sort((a, b) => a.delta - b.delta)[0];
+  const stubborn = diff.filter(e => e.before > 0 && e.delta >= 0).sort((a, b) => b.after - a.after)[0];
+  const ranked = rankWeaknessesByLeverage(currentMistakeTags, currentMistakeCost);
+  const focusTag = ranked.length ? ranked[0].tag : null;
+
+  const parts = [`Rating this week: ${ratingDelta >= 0 ? '+' : ''}${ratingDelta}.`];
+  if(improved) parts.push(`Most improved: "${improved.tag}" (down from ${improved.before} to ${improved.after}).`);
+  if(stubborn) parts.push(`Most stubborn: "${stubborn.tag}" (still ${stubborn.after}).`);
+  if(focusTag) parts.push(`Focus suggestion: work on "${focusTag}" — it's costing you the most right now.`);
+  return parts.join(' ');
+}
+
 // Node/Vitest can require() this file directly; the browser (classic
 // <script> tag, no `module` global) just skips this block.
 if(typeof module !== 'undefined' && module.exports){
@@ -305,6 +345,7 @@ if(typeof module !== 'undefined' && module.exports){
     rankPiecesByLeverage, pieceCallout,
     groupIntoSessions, sessionSummary, accuracyByPositionInSession, fatigueCallout,
     expectedScore, calibrationDrift, calibrationCallout,
-    milestoneForRating, crossedMilestones, diffMistakeTags, compareToPastSelfCallout
+    milestoneForRating, crossedMilestones, diffMistakeTags, compareToPastSelfCallout,
+    shouldTakeWeeklySnapshot, weeklyCoachNote
   };
 }

@@ -11,7 +11,8 @@ const {
   rankPiecesByLeverage, pieceCallout,
   groupIntoSessions, sessionSummary, accuracyByPositionInSession, fatigueCallout,
   expectedScore, calibrationDrift, calibrationCallout,
-  milestoneForRating, crossedMilestones, diffMistakeTags, compareToPastSelfCallout
+  milestoneForRating, crossedMilestones, diffMistakeTags, compareToPastSelfCallout,
+  shouldTakeWeeklySnapshot, weeklyCoachNote
 } = require('../src/insights.js');
 
 describe('rankWeaknessesByLeverage (Layer 2.1)', () => {
@@ -424,5 +425,63 @@ describe('diffMistakeTags / compareToPastSelfCallout (Layer 2.6)', () => {
     expect(callout).toContain('1500');
     expect(callout).toMatch(/"Walked into a fork" is down from 5 to 1/);
     expect(callout).toMatch(/"Dropped a pawn" is up from 6 to 8/);
+  });
+});
+
+describe('shouldTakeWeeklySnapshot (Layer 2.7)', () => {
+  const DAY_MS = 24*60*60*1000;
+
+  it('is true with no snapshots yet (need an initial baseline)', () => {
+    expect(shouldTakeWeeklySnapshot([], Date.now())).toBe(true);
+    expect(shouldTakeWeeklySnapshot(undefined, Date.now())).toBe(true);
+  });
+
+  it('is false when less than 7 days have passed since the last snapshot', () => {
+    const now = Date.now();
+    const snapshots = [{date: new Date(now - 3*DAY_MS).toISOString()}];
+    expect(shouldTakeWeeklySnapshot(snapshots, now)).toBe(false);
+  });
+
+  it('is true once 7 or more days have passed', () => {
+    const now = Date.now();
+    const snapshots = [{date: new Date(now - 7*DAY_MS).toISOString()}];
+    expect(shouldTakeWeeklySnapshot(snapshots, now)).toBe(true);
+  });
+});
+
+describe('weeklyCoachNote (Layer 2.7)', () => {
+  it('returns null with no previous snapshot to compare against', () => {
+    expect(weeklyCoachNote(null, 1500, {}, {})).toBeNull();
+  });
+
+  it('reports rating delta, most-improved, most-stubborn, and a focus suggestion', () => {
+    const previous = {rating: 1480, mistakeTags: {'Walked into a fork': 5, 'Dropped a pawn': 2}};
+    const currentTags = {'Walked into a fork': 1, 'Dropped a pawn': 4};
+    const currentCost = {'Walked into a fork': 400, 'Dropped a pawn': 240};
+    const note = weeklyCoachNote(previous, 1510, currentTags, currentCost);
+
+    expect(note).toContain('Rating this week: +30');
+    expect(note).toMatch(/Most improved: "Walked into a fork" \(down from 5 to 1\)/);
+    expect(note).toMatch(/Most stubborn: "Dropped a pawn" \(still 4\)/);
+    expect(note).toMatch(/Focus suggestion:.*"Walked into a fork"/);
+  });
+
+  it('does not call a brand-new tag (not present before) "stubborn"', () => {
+    // A tag with before:0 is new this week, not a persisting weakness.
+    const previous = {rating: 1500, mistakeTags: {}};
+    const note = weeklyCoachNote(previous, 1500, {'King safety lapse': 3}, {'King safety lapse': 300});
+    expect(note).not.toMatch(/Most stubborn/);
+  });
+
+  it('reports a negative rating delta correctly (no extra minus sign)', () => {
+    const previous = {rating: 1500, mistakeTags: {}};
+    const note = weeklyCoachNote(previous, 1470, {}, {});
+    expect(note).toContain('Rating this week: -30');
+  });
+
+  it('omits the improved/stubborn/focus clauses when there is nothing to report', () => {
+    const previous = {rating: 1500, mistakeTags: {}};
+    const note = weeklyCoachNote(previous, 1500, {}, {});
+    expect(note).toBe('Rating this week: +0.');
   });
 });

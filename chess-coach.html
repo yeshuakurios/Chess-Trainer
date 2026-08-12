@@ -271,6 +271,9 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
       <button class="big-btn secondary" id="btnRecalibrate" style="padding:8px;">Re-run calibration game</button>
     </div>
 
+    <div class="section-title" id="weeklyNoteTitle" style="display:none;">This week</div>
+    <div class="feedback-text" id="weeklyNoteText" style="display:none; margin-bottom:14px;"></div>
+
     <div class="section-title">This session</div>
     <div class="feedback-text" id="fatigueCallout" style="display:none; margin-bottom:6px;"></div>
     <div class="ledger" id="sessionLedger"><div class="empty-note">Finish a game to see a session summary here.</div></div>
@@ -322,6 +325,7 @@ const DEFAULT_PROFILE = {
   mistakesByPiece: {},     // {p|n|b|r|q|k: count} — Layer 2.2
   mistakePieceCost: {},    // {p|n|b|r|q|k: cumulative centipawn loss} — Layer 2.2
   milestoneSnapshots: {},  // {100-point rating: {mistakeTags, date}} — Layer 2.6 compare-to-past-self
+  weeklySnapshots: [],     // [{date, rating, mistakeTags}] — Layer 2.7 weekly coach's note
   openingMistakes: [],    // [{line, played, note}]
   totalCpLoss: 0,
   totalMovesGraded: 0,
@@ -1159,6 +1163,43 @@ function finishGame(resigned){
 /* ============================================================
    PROGRESS VIEW
    ============================================================ */
+// Layer 2.7 weekly coach's note: renders live progress since the most
+// recent weekly checkpoint (not just once a week — this reflects "how has
+// this week gone so far" every time Progress is viewed), then rolls the
+// checkpoint forward once 7+ days have actually passed since the last one.
+function refreshWeeklyNote(){
+  const titleEl = document.getElementById('weeklyNoteTitle');
+  const textEl = document.getElementById('weeklyNoteText');
+
+  if(!profile.diagnosticDone){
+    titleEl.style.display = 'none';
+    textEl.style.display = 'none';
+    return;
+  }
+
+  const snapshots = profile.weeklySnapshots || [];
+  const lastSnapshot = snapshots.length ? snapshots[snapshots.length-1] : null;
+  const note = weeklyCoachNote(lastSnapshot, profile.rating, profile.mistakeTags, profile.mistakeCost);
+  if(note){
+    textEl.textContent = note;
+    textEl.style.display = 'block';
+    titleEl.style.display = 'block';
+  } else {
+    textEl.style.display = 'none';
+    titleEl.style.display = 'none';
+  }
+
+  if(shouldTakeWeeklySnapshot(profile.weeklySnapshots, Date.now())){
+    profile.weeklySnapshots.push({
+      date: new Date().toISOString(),
+      rating: profile.rating,
+      mistakeTags: JSON.parse(JSON.stringify(profile.mistakeTags))
+    });
+    if(profile.weeklySnapshots.length>26) profile.weeklySnapshots.shift(); // ~6 months
+    saveProfile();
+  }
+}
+
 function refreshProgress(){
   document.getElementById('pStatRating').textContent = profile.rating || '—';
   document.getElementById('pStatGames').textContent = profile.gamesPlayed;
@@ -1175,6 +1216,8 @@ function refreshProgress(){
   } else {
     calibrationBanner.style.display = 'none';
   }
+
+  refreshWeeklyNote();
 
   const sessionLedger = document.getElementById('sessionLedger');
   const fatigueCalloutEl = document.getElementById('fatigueCallout');
