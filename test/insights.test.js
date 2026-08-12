@@ -5,7 +5,11 @@ import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
-const { rankWeaknessesByLeverage, leverageCallout } = require('../src/insights.js');
+const {
+  rankWeaknessesByLeverage, leverageCallout,
+  phaseForMoveNumber, phaseBreakdown, phaseCallout,
+  rankPiecesByLeverage, pieceCallout
+} = require('../src/insights.js');
 
 describe('rankWeaknessesByLeverage (Layer 2.1)', () => {
   it('ranks by total accumulated cost, not raw frequency', () => {
@@ -75,5 +79,88 @@ describe('leverageCallout (Layer 2.1)', () => {
       {}
     );
     expect(leverageCallout(ranked)).toBeNull();
+  });
+});
+
+describe('phaseForMoveNumber (Layer 2.2)', () => {
+  it('buckets per FEATURESPEC.md\'s own boundaries: opening <10, middlegame 10-30, endgame 30+', () => {
+    expect(phaseForMoveNumber(1)).toBe('opening');
+    expect(phaseForMoveNumber(9)).toBe('opening');
+    expect(phaseForMoveNumber(10)).toBe('middlegame');
+    expect(phaseForMoveNumber(30)).toBe('middlegame');
+    expect(phaseForMoveNumber(31)).toBe('endgame');
+    expect(phaseForMoveNumber(60)).toBe('endgame');
+  });
+});
+
+describe('phaseBreakdown / phaseCallout (Layer 2.2)', () => {
+  it('computes percentages that sum to (approximately) 100', () => {
+    const {total, entries} = phaseBreakdown({opening:1, middlegame:2, endgame:1});
+    expect(total).toBe(4);
+    const pctSum = entries.reduce((s,e)=>s+e.pct, 0);
+    expect(pctSum).toBeGreaterThanOrEqual(99);
+    expect(pctSum).toBeLessThanOrEqual(101);
+  });
+
+  it('always returns all three phases even when some have zero mistakes', () => {
+    const {entries} = phaseBreakdown({endgame: 3});
+    const phases = entries.map(e => e.phase).sort();
+    expect(phases).toEqual(['endgame', 'middlegame', 'opening']);
+    expect(entries.find(e => e.phase==='opening').count).toBe(0);
+  });
+
+  it('surfaces a callout when one phase clearly dominates with enough data', () => {
+    const callout = phaseCallout({opening:0, middlegame:1, endgame:6});
+    expect(callout).toMatch(/86%/);
+    expect(callout).toMatch(/endgame/i);
+  });
+
+  it('returns null with too little data to say anything meaningful', () => {
+    expect(phaseCallout({opening:0, middlegame:1, endgame:2})).toBeNull();
+  });
+
+  it('returns null when mistakes are spread fairly evenly across phases', () => {
+    expect(phaseCallout({opening:3, middlegame:3, endgame:3})).toBeNull();
+  });
+
+  it('handles an entirely empty phase profile without throwing', () => {
+    expect(phaseBreakdown({})).toEqual({
+      total: 0,
+      entries: [
+        {phase:'opening', count:0, pct:0},
+        {phase:'middlegame', count:0, pct:0},
+        {phase:'endgame', count:0, pct:0},
+      ]
+    });
+    expect(phaseCallout({})).toBeNull();
+  });
+});
+
+describe('rankPiecesByLeverage / pieceCallout (Layer 2.2)', () => {
+  it('ranks pieces by total cost, same as rankWeaknessesByLeverage', () => {
+    const ranked = rankPiecesByLeverage({n:4, p:10}, {n:1200, p:400});
+    expect(ranked[0].tag).toBe('n');
+    expect(ranked[0].totalCost).toBe(1200);
+  });
+
+  it('names the costliest piece in plain English, pluralized', () => {
+    const callout = pieceCallout({n:4, p:10}, {n:1200, p:400});
+    expect(callout).toMatch(/^Knights are your costliest piece/);
+    expect(callout).toContain('4 mistakes');
+    expect(callout).toContain('300 centipawns');
+  });
+
+  it('uses singular phrasing for exactly one mistake', () => {
+    const callout = pieceCallout({q:1}, {q:900});
+    expect(callout).toContain('1 mistake ');
+    expect(callout).not.toContain('1 mistakes');
+  });
+
+  it('returns null when there is no recorded cost yet', () => {
+    expect(pieceCallout({n:3}, {})).toBeNull();
+  });
+
+  it('returns null for an empty profile', () => {
+    expect(pieceCallout({}, {})).toBeNull();
   });
 });

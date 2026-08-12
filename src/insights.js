@@ -42,8 +42,67 @@ function leverageCallout(ranked){
   return `Fixing "${costliest.tag}" would likely be worth more than anything else on this list — it's not your most frequent mistake, but it's your costliest.`;
 }
 
+/* ---------- 2.2: Weakness heatmap by phase and piece ---------- */
+const INSIGHTS_PIECE_NAMES = {p:'pawn', n:'knight', b:'bishop', r:'rook', q:'queen', k:'king'};
+
+// Per FEATURESPEC.md's own bucket boundaries: "opening <10, middlegame
+// 10-30, endgame 30+", in full move numbers (not plies).
+function phaseForMoveNumber(moveNumber){
+  if(moveNumber < 10) return 'opening';
+  if(moveNumber <= 30) return 'middlegame';
+  return 'endgame';
+}
+
+function phaseBreakdown(mistakesByPhase){
+  const phases = mistakesByPhase || {};
+  const total = Object.values(phases).reduce((sum, n) => sum + n, 0);
+  const entries = ['opening', 'middlegame', 'endgame'].map((phase) => {
+    const count = phases[phase] || 0;
+    return {phase, count, pct: total > 0 ? Math.round(100 * count / total) : 0};
+  });
+  return {total, entries};
+}
+
+// "73% of blunders happen after move 30" — only surfaced once there's
+// enough data to say something meaningful, and only when one phase clearly
+// dominates rather than mistakes being spread fairly evenly.
+function phaseCallout(mistakesByPhase){
+  const {total, entries} = phaseBreakdown(mistakesByPhase);
+  if(total < 4) return null;
+  const top = [...entries].sort((a, b) => b.count - a.count)[0];
+  if(top.pct < 50) return null;
+  const phaseLabel = {
+    opening: 'the opening',
+    middlegame: 'the middlegame',
+    endgame: 'the endgame (after move 30)',
+  }[top.phase];
+  return `${top.pct}% of your mistakes happen in ${phaseLabel}.`;
+}
+
+// Same shape as rankWeaknessesByLeverage (count + cost maps keyed by a
+// string), so it's reused directly rather than reimplemented — here the
+// keys are piece letters (p/n/b/r/q/k) instead of tag names.
+function rankPiecesByLeverage(mistakesByPiece, mistakePieceCost){
+  return rankWeaknessesByLeverage(mistakesByPiece, mistakePieceCost);
+}
+
+// "Knights are your costliest piece" — only surfaced once there's an
+// actual cost recorded; a piece with mistakes but zero recorded cost
+// (e.g. cost data predates this feature) has nothing meaningful to report.
+function pieceCallout(mistakesByPiece, mistakePieceCost){
+  const ranked = rankPiecesByLeverage(mistakesByPiece, mistakePieceCost);
+  if(ranked.length === 0 || ranked[0].totalCost <= 0) return null;
+  const top = ranked[0];
+  const name = INSIGHTS_PIECE_NAMES[top.tag] || top.tag;
+  return `${name.charAt(0).toUpperCase()}${name.slice(1)}s are your costliest piece — ${top.count} mistake${top.count===1?'':'s'} involving them, averaging ${Math.round(top.avgCost)} centipawns.`;
+}
+
 // Node/Vitest can require() this file directly; the browser (classic
 // <script> tag, no `module` global) just skips this block.
 if(typeof module !== 'undefined' && module.exports){
-  module.exports = { rankWeaknessesByLeverage, leverageCallout };
+  module.exports = {
+    rankWeaknessesByLeverage, leverageCallout,
+    phaseForMoveNumber, phaseBreakdown, phaseCallout,
+    rankPiecesByLeverage, pieceCallout
+  };
 }

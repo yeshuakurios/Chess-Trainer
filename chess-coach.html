@@ -269,6 +269,11 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
     <div class="feedback-text" id="leverageCallout" style="display:none; margin-bottom:10px;"></div>
     <div class="ledger" id="mistakeLedger"><div class="empty-note">Play a few games and patterns will show up here.</div></div>
 
+    <div class="section-title">Weakness patterns</div>
+    <div class="feedback-text" id="phaseCallout" style="display:none; margin-bottom:6px;"></div>
+    <div class="feedback-text" id="pieceCallout" style="display:none; margin-bottom:10px;"></div>
+    <div class="ledger" id="phaseLedger"><div class="empty-note">Play a few games and patterns will show up here.</div></div>
+
     <div class="section-title">Opening mistakes</div>
     <div id="openingLedger"><div class="empty-note">No opening deviations logged yet.</div></div>
 
@@ -303,6 +308,9 @@ const DEFAULT_PROFILE = {
   ratingHistory: [],     // [{rating, delta, opponent, result, date}]
   mistakeTags: {},        // {tag: count}
   mistakeCost: {},        // {tag: cumulative centipawn loss} — Layer 2.1 leverage ranking
+  mistakesByPhase: {opening:0, middlegame:0, endgame:0},  // Layer 2.2
+  mistakesByPiece: {},     // {p|n|b|r|q|k: count} — Layer 2.2
+  mistakePieceCost: {},    // {p|n|b|r|q|k: cumulative centipawn loss} — Layer 2.2
   openingMistakes: [],    // [{line, played, note}]
   totalCpLoss: 0,
   totalMovesGraded: 0,
@@ -682,6 +690,14 @@ async function makePlayerMove(from, to){
     const tag = tagMistake(preMoveFEN, fenAfterYourMove, replySan, playerColor);
     profile.mistakeTags[tag] = (profile.mistakeTags[tag]||0)+1;
     profile.mistakeCost[tag] = (profile.mistakeCost[tag]||0) + Math.round(loss*100);
+
+    // Weakness heatmap by phase and piece (Layer 2.2 of FEATURESPEC.md).
+    const moveNumber = Math.ceil(game.history().length/2);
+    const phase = phaseForMoveNumber(moveNumber);
+    profile.mistakesByPhase[phase] = (profile.mistakesByPhase[phase]||0)+1;
+    profile.mistakesByPiece[mv.piece] = (profile.mistakesByPiece[mv.piece]||0)+1;
+    profile.mistakePieceCost[mv.piece] = (profile.mistakePieceCost[mv.piece]||0) + Math.round(loss*100);
+
     saveMistakeForRecycling(preMoveFEN, mv.san, bestSan, loss, replySan, complexity);
   }
 
@@ -1108,6 +1124,27 @@ function refreshProgress(){
     } else {
       calloutEl.style.display = 'none';
     }
+  }
+
+  const phaseLedger = document.getElementById('phaseLedger');
+  const phaseCalloutEl = document.getElementById('phaseCallout');
+  const pieceCalloutEl = document.getElementById('pieceCallout');
+  const {total: phaseTotal, entries: phaseEntries} = phaseBreakdown(profile.mistakesByPhase);
+  if(phaseTotal===0){
+    phaseLedger.innerHTML = '<div class="empty-note">Play a few games and patterns will show up here.</div>';
+    phaseCalloutEl.style.display = 'none';
+    pieceCalloutEl.style.display = 'none';
+  } else {
+    const PHASE_LABEL = {opening:'Opening (< move 10)', middlegame:'Middlegame (10-30)', endgame:'Endgame (30+)'};
+    phaseLedger.innerHTML = phaseEntries.map(({phase,count,pct})=>
+      `<div class="ledger-row"><span class="tag">${PHASE_LABEL[phase]}</span><span class="count">${count}× · ${pct}%</span></div>`
+    ).join('');
+    const pCallout = phaseCallout(profile.mistakesByPhase);
+    if(pCallout){ phaseCalloutEl.textContent = pCallout; phaseCalloutEl.style.display = 'block'; }
+    else { phaseCalloutEl.style.display = 'none'; }
+    const pieceMsg = pieceCallout(profile.mistakesByPiece, profile.mistakePieceCost);
+    if(pieceMsg){ pieceCalloutEl.textContent = pieceMsg; pieceCalloutEl.style.display = 'block'; }
+    else { pieceCalloutEl.style.display = 'none'; }
   }
 
   const oLedger = document.getElementById('openingLedger');
