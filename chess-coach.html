@@ -265,6 +265,10 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
       <div class="stat-box"><div class="n" id="pStatAvgLoss">—</div><div class="l">Avg. centipawn loss</div></div>
     </div>
 
+    <div class="section-title">This session</div>
+    <div class="feedback-text" id="fatigueCallout" style="display:none; margin-bottom:6px;"></div>
+    <div class="ledger" id="sessionLedger"><div class="empty-note">Finish a game to see a session summary here.</div></div>
+
     <div class="section-title">Recurring mistakes</div>
     <div class="feedback-text" id="leverageCallout" style="display:none; margin-bottom:10px;"></div>
     <div class="ledger" id="mistakeLedger"><div class="empty-note">Play a few games and patterns will show up here.</div></div>
@@ -686,10 +690,11 @@ async function makePlayerMove(from, to){
 
   checkOpeningBook(mv, loss);
 
+  let mistakeTag = null;
   if((grade==='mistake' || grade==='blunder') && !deliversMate){
-    const tag = tagMistake(preMoveFEN, fenAfterYourMove, replySan, playerColor);
-    profile.mistakeTags[tag] = (profile.mistakeTags[tag]||0)+1;
-    profile.mistakeCost[tag] = (profile.mistakeCost[tag]||0) + Math.round(loss*100);
+    mistakeTag = tagMistake(preMoveFEN, fenAfterYourMove, replySan, playerColor);
+    profile.mistakeTags[mistakeTag] = (profile.mistakeTags[mistakeTag]||0)+1;
+    profile.mistakeCost[mistakeTag] = (profile.mistakeCost[mistakeTag]||0) + Math.round(loss*100);
 
     // Weakness heatmap by phase and piece (Layer 2.2 of FEATURESPEC.md).
     const moveNumber = Math.ceil(game.history().length/2);
@@ -706,7 +711,7 @@ async function makePlayerMove(from, to){
   sessionMoves.push({
     san: mv.san, grade, loss,
     fenBefore: preMoveFEN, fenAfter: game.fen(),
-    best: bestSan, replySan, by:'you', complexity,
+    best: bestSan, replySan, by:'you', complexity, tag: mistakeTag,
     evalAfter: (evalAfter !== null ? evalAfter : undefined)
   });
 
@@ -1017,6 +1022,7 @@ function finishGame(resigned){
   const avgLoss = sessionMovesGraded>0 ? (sessionCpLossTotal/sessionMovesGraded) : 0.5;
   profile.totalCpLoss += sessionCpLossTotal;
   profile.totalMovesGraded += sessionMovesGraded;
+  let gameDelta = null; // stays null for the diagnostic game, same convention as ratingHistory
 
   if(!profile.diagnosticDone){
     // Compute initial rating estimate from result + average centipawn loss quality
@@ -1049,6 +1055,7 @@ function finishGame(resigned){
     const K = gamesSoDiagnostic < 5 ? 48 : gamesSoDiagnostic < 15 ? 32 : 24;
     const newRating = Math.round(profile.rating + K*(result-expected));
     const delta = newRating - profile.rating;
+    gameDelta = delta;
     profile.rating = Math.max(300, newRating);
     profile.gamesPlayed += 1;
     if(result===1) profile.wins++; else if(result===0.5) profile.draws++; else profile.losses++;
@@ -1073,15 +1080,25 @@ function finishGame(resigned){
     document.getElementById('resultNote').textContent = `New rating: ${profile.rating} (opponent was ~${oppElo}). Next opponent target: ~${profile.rating+gap}. Average centipawn loss this game: ${Math.round(avgLoss*100)}.`;
   }
 
+  // Per-game mistake tag counts, for Layer 2.4's "common thread across a
+  // session's mistakes" — a lightweight per-game snapshot, not the full
+  // move-by-move detail (that only lives in sessionMoves, which resets
+  // each game).
+  const mistakeTagsThisGame = {};
+  for(const m of sessionMoves){
+    if(m.tag) mistakeTagsThisGame[m.tag] = (mistakeTagsThisGame[m.tag]||0)+1;
+  }
+  const errCount = sessionMoves.filter(m=>m.grade==='mistake'||m.grade==='blunder').length;
+
   // Persist the game for review and report what got recycled
   profile.gameLog.push({
     date: new Date().toISOString(),
     result, opponent: gameOpponentElo, playerColor,
-    moveCount: sessionMoves.length
+    moveCount: sessionMoves.length,
+    avgCpLoss: Math.round(avgLoss*100), delta: gameDelta,
+    mistakeCount: errCount, mistakeTagsThisGame
   });
   if(profile.gameLog.length>30) profile.gameLog.shift();
-
-  const errCount = sessionMoves.filter(m=>m.grade==='mistake'||m.grade==='blunder').length;
   document.getElementById('recycleNote').textContent = errCount>0
     ? `${errCount} position${errCount===1?'':'s'} saved to your drill queue — you'll re-attempt them in the Drills tab.`
     : 'No mistakes or blunders this game — nothing added to the drill queue.';
@@ -1106,6 +1123,32 @@ function refreshProgress(){
   document.getElementById('pStatWinPct').textContent = winPct;
   const avgCp = profile.totalMovesGraded>0 ? Math.round(100*profile.totalCpLoss/profile.totalMovesGraded) : null;
   document.getElementById('pStatAvgLoss').textContent = avgCp!==null ? avgCp : '—';
+
+  const sessionLedger = document.getElementById('sessionLedger');
+  const fatigueCalloutEl = document.getElementById('fatigueCallout');
+  const sessions = groupIntoSessions(profile.gameLog);
+  if(sessions.length===0){
+    sessionLedger.innerHTML = '<div class="empty-note">Finish a game to see a session summary here.</div>';
+    fatigueCalloutEl.style.display = 'none';
+  } else {
+    const lastSession = sessions[sessions.length-1];
+    const summary = sessionSummary(lastSession);
+    const rows = [
+      `<div class="ledger-row"><span class="tag">Games this session</span><span class="count">${summary.gameCount}</span></div>`,
+      `<div class="ledger-row"><span class="tag">Net rating change</span><span class="count">${summary.netRatingChange>=0?'+':''}${summary.netRatingChange}</span></div>`
+    ];
+    if(summary.commonThreadTag){
+      rows.push(`<div class="ledger-row"><span class="tag">Common thread</span><span class="count">${summary.commonThreadTag}</span></div>`);
+    }
+    sessionLedger.innerHTML = rows.join('');
+    const fatigue = fatigueCallout(profile.gameLog);
+    if(fatigue){
+      fatigueCalloutEl.textContent = fatigue;
+      fatigueCalloutEl.style.display = 'block';
+    } else {
+      fatigueCalloutEl.style.display = 'none';
+    }
+  }
 
   const mLedger = document.getElementById('mistakeLedger');
   const calloutEl = document.getElementById('leverageCallout');

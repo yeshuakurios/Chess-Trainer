@@ -8,7 +8,8 @@ const require = createRequire(import.meta.url);
 const {
   rankWeaknessesByLeverage, leverageCallout,
   phaseForMoveNumber, phaseBreakdown, phaseCallout,
-  rankPiecesByLeverage, pieceCallout
+  rankPiecesByLeverage, pieceCallout,
+  groupIntoSessions, sessionSummary, accuracyByPositionInSession, fatigueCallout
 } = require('../src/insights.js');
 
 describe('rankWeaknessesByLeverage (Layer 2.1)', () => {
@@ -162,5 +163,135 @@ describe('rankPiecesByLeverage / pieceCallout (Layer 2.2)', () => {
 
   it('returns null for an empty profile', () => {
     expect(pieceCallout({}, {})).toBeNull();
+  });
+});
+
+describe('groupIntoSessions (Layer 2.3/2.4)', () => {
+  it('groups games with small gaps into one session', () => {
+    const gameLog = [
+      {date: '2026-01-01T10:00:00.000Z'},
+      {date: '2026-01-01T10:20:00.000Z'}, // 20 min later, within the default 45min gap
+    ];
+    const sessions = groupIntoSessions(gameLog);
+    expect(sessions.length).toBe(1);
+    expect(sessions[0].length).toBe(2);
+  });
+
+  it('splits games with a large gap into separate sessions', () => {
+    const gameLog = [
+      {date: '2026-01-01T10:00:00.000Z'},
+      {date: '2026-01-01T12:00:00.000Z'}, // 2 hours later
+    ];
+    const sessions = groupIntoSessions(gameLog);
+    expect(sessions.length).toBe(2);
+    expect(sessions[0].length).toBe(1);
+    expect(sessions[1].length).toBe(1);
+  });
+
+  it('respects a custom gap threshold', () => {
+    const gameLog = [
+      {date: '2026-01-01T10:00:00.000Z'},
+      {date: '2026-01-01T10:20:00.000Z'}, // 20 min later
+    ];
+    expect(groupIntoSessions(gameLog, 45).length).toBe(1); // default-equivalent: same session
+    expect(groupIntoSessions(gameLog, 10).length).toBe(2); // tighter threshold: separate sessions
+  });
+
+  it('sorts out-of-order input by date before grouping', () => {
+    const gameLog = [
+      {date: '2026-01-01T12:00:00.000Z', label:'later'},
+      {date: '2026-01-01T10:00:00.000Z', label:'earlier'},
+    ];
+    const sessions = groupIntoSessions(gameLog);
+    expect(sessions[0][0].label).toBe('earlier');
+  });
+
+  it('returns an empty array for an empty gameLog', () => {
+    expect(groupIntoSessions([])).toEqual([]);
+  });
+});
+
+describe('sessionSummary (Layer 2.4)', () => {
+  it('sums delta across the session, treating a null delta (diagnostic game) as zero', () => {
+    const games = [{delta: 20}, {delta: null}, {delta: -5}];
+    expect(sessionSummary(games).netRatingChange).toBe(15);
+  });
+
+  it('identifies a common thread tag that recurs across at least two games', () => {
+    const games = [
+      {mistakeTagsThisGame: {'Walked into a fork': 2, 'Dropped a pawn': 1}},
+      {mistakeTagsThisGame: {'Walked into a fork': 1}},
+      {mistakeTagsThisGame: {}},
+    ];
+    expect(sessionSummary(games).commonThreadTag).toBe('Walked into a fork');
+  });
+
+  it('does not call a tag a "thread" if it only ever appeared within a single game', () => {
+    // "Dropped a pawn" happened 5 times, but all in the same game — that's
+    // a bad game, not a thread across the session.
+    const games = [
+      {mistakeTagsThisGame: {'Dropped a pawn': 5}},
+      {mistakeTagsThisGame: {}},
+    ];
+    expect(sessionSummary(games).commonThreadTag).toBeNull();
+  });
+
+  it('handles an empty session without throwing', () => {
+    expect(sessionSummary([])).toEqual({
+      gameCount: 0, netRatingChange: 0, avgLossPerGame: [], commonThreadTag: null
+    });
+  });
+});
+
+describe('accuracyByPositionInSession / fatigueCallout (Layer 2.3)', () => {
+  // Three independent sessions (gapped a full day apart so they never
+  // merge), each with 4 games at increasing avgCpLoss — a clear, sampled
+  // fatigue pattern starting at the 4th game of a sitting.
+  function buildFatigueGameLog(){
+    const gameLog = [];
+    const perSessionLosses = [30, 35, 40, 85]; // pawn-ish -> clear jump at position 4
+    for(let day = 0; day < 3; day++){
+      perSessionLosses.forEach((loss, i) => {
+        const d = new Date(Date.UTC(2026, 0, 1 + day, 10, i * 10, 0));
+        gameLog.push({date: d.toISOString(), avgCpLoss: loss});
+      });
+    }
+    return gameLog;
+  }
+
+  it('buckets average accuracy by position within a session, pooled across sessions', () => {
+    const byPosition = accuracyByPositionInSession(buildFatigueGameLog());
+    expect(byPosition.map(p => p.position)).toEqual([1, 2, 3, 4]);
+    expect(byPosition.every(p => p.gameCount === 3)).toBe(true);
+    expect(byPosition[0].avgLoss).toBe(30);
+    expect(byPosition[3].avgLoss).toBe(85);
+  });
+
+  it('surfaces a fatigue callout naming the position where accuracy clearly drops', () => {
+    const callout = fatigueCallout(buildFatigueGameLog());
+    expect(callout).toMatch(/3rd game/);
+  });
+
+  it('returns null without enough baseline (1st-game) samples', () => {
+    const gameLog = [
+      {date: '2026-01-01T10:00:00.000Z', avgCpLoss: 30},
+      {date: '2026-01-01T10:10:00.000Z', avgCpLoss: 90},
+    ];
+    expect(fatigueCallout(gameLog)).toBeNull();
+  });
+
+  it('returns null when accuracy stays roughly flat across a session', () => {
+    const gameLog = [];
+    for(let day = 0; day < 3; day++){
+      [30, 32, 31, 33].forEach((loss, i) => {
+        const d = new Date(Date.UTC(2026, 0, 1 + day, 10, i * 10, 0));
+        gameLog.push({date: d.toISOString(), avgCpLoss: loss});
+      });
+    }
+    expect(fatigueCallout(gameLog)).toBeNull();
+  });
+
+  it('returns an empty array for an empty gameLog', () => {
+    expect(accuracyByPositionInSession([])).toEqual([]);
   });
 });

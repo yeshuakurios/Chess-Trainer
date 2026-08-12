@@ -97,12 +97,117 @@ function pieceCallout(mistakesByPiece, mistakePieceCost){
   return `${name.charAt(0).toUpperCase()}${name.slice(1)}s are your costliest piece — ${top.count} mistake${top.count===1?'':'s'} involving them, averaging ${Math.round(top.avgCost)} centipawns.`;
 }
 
+/* ---------- 2.3 / 2.4: Sessions, time-of-day, session review ---------- */
+// FEATURESPEC.md: "define a session as games with <30-60 min gaps" — 45
+// minutes is the midpoint of that stated range.
+const DEFAULT_SESSION_GAP_MINUTES = 45;
+
+// Splits profile.gameLog into sessions: consecutive games (sorted by date)
+// where the gap between one game ending and the next starting is below the
+// threshold. Returns an array of games-arrays, oldest session first.
+function groupIntoSessions(gameLog, gapMinutes){
+  const gapMs = (gapMinutes || DEFAULT_SESSION_GAP_MINUTES) * 60 * 1000;
+  const sorted = [...(gameLog || [])].sort((a, b) => new Date(a.date) - new Date(b.date));
+  const sessions = [];
+  let lastTime = null;
+  for(const g of sorted){
+    const t = new Date(g.date).getTime();
+    if(lastTime === null || (t - lastTime) > gapMs){
+      sessions.push([]);
+    }
+    sessions[sessions.length - 1].push(g);
+    lastTime = t;
+  }
+  return sessions;
+}
+
+function ordinal(n){
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+// Aggregate summary for one session's worth of games: net rating change,
+// and the "common thread" — a mistake tag that showed up in at least two
+// different games in the session (not just multiple times in one game),
+// since that's what makes it a recurring thread across the sitting rather
+// than a single bad moment.
+function sessionSummary(sessionGames){
+  const games = sessionGames || [];
+  const netRatingChange = games.reduce((sum, g) => sum + (g.delta || 0), 0);
+  const avgLosses = games.map(g => g.avgCpLoss).filter(v => typeof v === 'number');
+
+  const tagGameCounts = {};
+  for(const g of games){
+    for(const tag of Object.keys(g.mistakeTagsThisGame || {})){
+      tagGameCounts[tag] = (tagGameCounts[tag] || 0) + 1;
+    }
+  }
+  let commonThreadTag = null;
+  let bestGameCount = 1; // must appear in at least 2 games to count as a "thread"
+  for(const [tag, gameCount] of Object.entries(tagGameCounts)){
+    if(gameCount > bestGameCount){ bestGameCount = gameCount; commonThreadTag = tag; }
+  }
+
+  return {
+    gameCount: games.length,
+    netRatingChange,
+    avgLossPerGame: avgLosses,
+    commonThreadTag,
+  };
+}
+
+// For each position within a session (1st game, 2nd game, ...), the
+// average accuracy (avgCpLoss) of games played at that position, pooled
+// across every session in gameLog. This is the raw material for spotting
+// a fatigue pattern — it does NOT itself claim there is one.
+function accuracyByPositionInSession(gameLog, gapMinutes){
+  const sessions = groupIntoSessions(gameLog, gapMinutes);
+  const byPosition = {};
+  for(const games of sessions){
+    games.forEach((g, i) => {
+      if(typeof g.avgCpLoss !== 'number') return;
+      const pos = i + 1;
+      if(!byPosition[pos]) byPosition[pos] = [];
+      byPosition[pos].push(g.avgCpLoss);
+    });
+  }
+  return Object.entries(byPosition)
+    .map(([pos, losses]) => ({
+      position: Number(pos),
+      avgLoss: losses.reduce((a, b) => a + b, 0) / losses.length,
+      gameCount: losses.length,
+    }))
+    .sort((a, b) => a.position - b.position);
+}
+
+// "Accuracy drops noticeably after your 3rd game in a sitting" — only
+// surfaced with a reasonably sampled baseline (>=3 first-games observed)
+// and a position with its own reasonable sample (>=2 games) that's at
+// least 40% worse than that baseline. Sparse personal data makes false
+// patterns easy to see by accident; both sample-size gates exist so this
+// doesn't claim a fatigue pattern from two or three total games played.
+function fatigueCallout(gameLog, gapMinutes){
+  const byPosition = accuracyByPositionInSession(gameLog, gapMinutes);
+  if(byPosition.length < 2) return null;
+  const baseline = byPosition[0];
+  if(baseline.gameCount < 3) return null;
+  for(const entry of byPosition.slice(1)){
+    if(entry.gameCount < 2) continue;
+    if(entry.avgLoss >= baseline.avgLoss * 1.4){
+      return `Accuracy drops noticeably after your ${ordinal(entry.position - 1)} game in a sitting.`;
+    }
+  }
+  return null;
+}
+
 // Node/Vitest can require() this file directly; the browser (classic
 // <script> tag, no `module` global) just skips this block.
 if(typeof module !== 'undefined' && module.exports){
   module.exports = {
     rankWeaknessesByLeverage, leverageCallout,
     phaseForMoveNumber, phaseBreakdown, phaseCallout,
-    rankPiecesByLeverage, pieceCallout
+    rankPiecesByLeverage, pieceCallout,
+    groupIntoSessions, sessionSummary, accuracyByPositionInSession, fatigueCallout
   };
 }
