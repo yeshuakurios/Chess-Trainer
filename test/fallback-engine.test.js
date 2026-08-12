@@ -27,7 +27,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const { Chess } = require('chess.js');
-const { pickEngineMove, engineParamsForElo, searchRoot } = require('../src/fallback-engine.js');
+const { pickEngineMove, engineParamsForElo, searchRoot, positionComplexity } = require('../src/fallback-engine.js');
 
 // 4x the slowest fbDepth<=2 measurement seen on this host (~1.6s) — enough
 // headroom to absorb this sandbox's observed run-to-run CPU variance without
@@ -125,4 +125,40 @@ describe('searchRoot at Stockfish-scale depth (documents why fbDepth exists)', (
     const elapsed = Date.now() - start;
     expect(elapsed).toBeGreaterThan(SAFETY_CEILING_MS);
   }, 300000);
+});
+
+// FEATURESPEC.md Layer 1.4: position complexity ("only one good move" vs.
+// wide-open). Deliberately depth 1 (see the comment on positionComplexity
+// itself) — this runs on every graded move, not just mistakes, so
+// COMPLEXITY_FAST_BUDGET_MS is much tighter than the fbDepth budgets above.
+describe('positionComplexity (src/fallback-engine.js)', () => {
+  const COMPLEXITY_FAST_BUDGET_MS = 2000; // headroom over the ~25-60ms measured on this host
+
+  it('treats the starting position as maximally non-sharp: every legal move ties', () => {
+    const result = positionComplexity(START_FEN);
+    expect(result.legalMoveCount).toBe(20);
+    expect(result.closeMoveCount).toBe(20);
+  });
+
+  it('recognizes a razor-sharp position: only the move that wins the hanging queen stands out', () => {
+    const fen = '3q3k/8/8/8/8/8/8/3QK3 w - - 0 1';
+    const result = positionComplexity(fen);
+    expect(result.legalMoveCount).toBeGreaterThan(1);
+    expect(result.closeMoveCount).toBe(1);
+  });
+
+  it('stays within budget on a branchy middlegame position', () => {
+    const start = Date.now();
+    const result = positionComplexity(MIDDLEGAME_FEN);
+    const elapsed = Date.now() - start;
+    expect(result.legalMoveCount).toBeGreaterThan(0);
+    expect(elapsed).toBeLessThan(COMPLEXITY_FAST_BUDGET_MS);
+  });
+
+  it('returns zero counts without throwing on a position with no legal moves (checkmate)', () => {
+    // Fool's mate final position.
+    const fen = 'rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3';
+    const result = positionComplexity(fen);
+    expect(result).toEqual({legalMoveCount:0, closeMoveCount:0});
+  });
 });

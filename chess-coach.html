@@ -663,6 +663,13 @@ async function makePlayerMove(from, to){
     grade = sacrificeTier(sacInfo.materialLost);
   }
 
+  // Position-complexity scoring (FEATURESPEC.md Layer 1.4): how many legal
+  // moves were roughly as good as the best one, in the position the player
+  // actually faced. Stored alongside the grade so a blunder in a
+  // razor-sharp "only one good move" position can eventually be framed
+  // differently from one in a wide-open position with several fine options.
+  const complexity = positionComplexity(preMoveFEN);
+
   const bestEntry = bestSan ? {san:bestSan} : null;
   showFeedback(grade, mv.san, loss, null, bestEntry, preMoveFEN, replySan);
 
@@ -671,7 +678,7 @@ async function makePlayerMove(from, to){
   if((grade==='mistake' || grade==='blunder') && !deliversMate){
     const tag = tagMistake(preMoveFEN, fenAfterYourMove, replySan, playerColor);
     profile.mistakeTags[tag] = (profile.mistakeTags[tag]||0)+1;
-    saveMistakeForRecycling(preMoveFEN, mv.san, bestSan, loss, replySan);
+    saveMistakeForRecycling(preMoveFEN, mv.san, bestSan, loss, replySan, complexity);
   }
 
   sessionCpLossTotal += loss;
@@ -679,7 +686,7 @@ async function makePlayerMove(from, to){
   sessionMoves.push({
     san: mv.san, grade, loss,
     fenBefore: preMoveFEN, fenAfter: game.fen(),
-    best: bestSan, replySan, by:'you',
+    best: bestSan, replySan, by:'you', complexity,
     evalAfter: (evalAfter !== null ? evalAfter : undefined)
   });
 
@@ -1119,7 +1126,7 @@ function refreshProgress(){
 // Leitner boxes: interval in days for each box level.
 const BOX_INTERVALS = [0, 2, 6, 14, 30, 90];
 
-function saveMistakeForRecycling(fen, played, best, loss, replySan){
+function saveMistakeForRecycling(fen, played, best, loss, replySan, complexity){
   if(!best || best===played) return;
   // Don't store near-duplicates of the same position
   if(profile.savedMistakes.some(m=>m.fen===fen)) return;
@@ -1128,7 +1135,7 @@ function saveMistakeForRecycling(fen, played, best, loss, replySan){
   const tag = tagMistake(fen, fenAfterMove(fen, played), replySan, moverColor);
 
   profile.savedMistakes.push({
-    fen, played, best, tag,
+    fen, played, best, tag, complexity,
     loss: Math.round(loss*100),
     explain: `You played ${played} here. ${explainLoss(fen, played, best, loss, replySan)}`,
     box: 0,
