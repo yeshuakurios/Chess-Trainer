@@ -10,6 +10,7 @@
 <script src="src/engine.js"></script>
 <script src="src/tactics.js"></script>
 <script src="src/grading.js"></script>
+<script src="src/insights.js"></script>
 <style>
 :root{
   --ink:#0f1620;
@@ -265,6 +266,7 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
     </div>
 
     <div class="section-title">Recurring mistakes</div>
+    <div class="feedback-text" id="leverageCallout" style="display:none; margin-bottom:10px;"></div>
     <div class="ledger" id="mistakeLedger"><div class="empty-note">Play a few games and patterns will show up here.</div></div>
 
     <div class="section-title">Opening mistakes</div>
@@ -300,6 +302,7 @@ const DEFAULT_PROFILE = {
   ratingGap: 25,         // dynamic target-opponent offset, adjusts with streaks
   ratingHistory: [],     // [{rating, delta, opponent, result, date}]
   mistakeTags: {},        // {tag: count}
+  mistakeCost: {},        // {tag: cumulative centipawn loss} — Layer 2.1 leverage ranking
   openingMistakes: [],    // [{line, played, note}]
   totalCpLoss: 0,
   totalMovesGraded: 0,
@@ -678,6 +681,7 @@ async function makePlayerMove(from, to){
   if((grade==='mistake' || grade==='blunder') && !deliversMate){
     const tag = tagMistake(preMoveFEN, fenAfterYourMove, replySan, playerColor);
     profile.mistakeTags[tag] = (profile.mistakeTags[tag]||0)+1;
+    profile.mistakeCost[tag] = (profile.mistakeCost[tag]||0) + Math.round(loss*100);
     saveMistakeForRecycling(preMoveFEN, mv.san, bestSan, loss, replySan, complexity);
   }
 
@@ -1088,11 +1092,22 @@ function refreshProgress(){
   document.getElementById('pStatAvgLoss').textContent = avgCp!==null ? avgCp : '—';
 
   const mLedger = document.getElementById('mistakeLedger');
-  const tags = Object.entries(profile.mistakeTags).sort((a,b)=>b[1]-a[1]);
-  if(tags.length===0){
+  const calloutEl = document.getElementById('leverageCallout');
+  const ranked = rankWeaknessesByLeverage(profile.mistakeTags, profile.mistakeCost);
+  if(ranked.length===0){
     mLedger.innerHTML = '<div class="empty-note">Play a few games and patterns will show up here.</div>';
+    calloutEl.style.display = 'none';
   } else {
-    mLedger.innerHTML = tags.map(([tag,count])=>`<div class="ledger-row"><span class="tag">${tag}</span><span class="count">${count}×</span></div>`).join('');
+    mLedger.innerHTML = ranked.map(({tag,count,avgCost})=>
+      `<div class="ledger-row"><span class="tag">${tag}</span><span class="count">${count}× · avg ${Math.round(avgCost)}cp</span></div>`
+    ).join('');
+    const callout = leverageCallout(ranked);
+    if(callout){
+      calloutEl.textContent = callout;
+      calloutEl.style.display = 'block';
+    } else {
+      calloutEl.style.display = 'none';
+    }
   }
 
   const oLedger = document.getElementById('openingLedger');
