@@ -261,6 +261,14 @@ function detectRemovingDefender(fenBeforeReply, replySan, defenderColor){
 function detectOverloadedDefender(fenBeforePlayerMove, defenderColor){
   const g = new Chess(fenBeforePlayerMove);
   const board = g.board();
+  const attackerColor = oppositeColor(defenderColor);
+  // A dependent square only counts if the enemy could actually contest it
+  // right now. Without this, "sole defender of 2+ squares" fires on almost
+  // any untouched back rank — e.g. a1's rook is always the sole defender of
+  // a2 and b1 before anything develops, purely because nothing else happens
+  // to cover them yet, not because either square is under any real threat.
+  // That's not an overload, it's just the opening position's geometry.
+  const contestedSquares = new Set(pseudoCaptures(fenBeforePlayerMove, attackerColor).map(m => m.to));
   const dependents = new Map(); // defenderSquare -> [dependentSquare, ...]
   for(let r=0;r<8;r++) for(let f=0;f<8;f++){
     const pc = board[r][f];
@@ -268,6 +276,7 @@ function detectOverloadedDefender(fenBeforePlayerMove, defenderColor){
     // piece in the material-overload sense.
     if(!pc || pc.color!==defenderColor || pc.type==='k') continue;
     const sq = squareNameAt(r,f);
+    if(!contestedSquares.has(sq)) continue;
     const defenders = defendersOfSquare(fenBeforePlayerMove, sq, defenderColor);
     // A king covering a square still counts toward whether it's genuinely
     // "sole"-defended by something else (don't ignore it there, or a piece

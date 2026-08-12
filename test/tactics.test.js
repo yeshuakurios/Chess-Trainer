@@ -188,8 +188,29 @@ describe('detectRemovingDefender', () => {
 });
 
 describe('detectOverloadedDefender', () => {
-  it('finds a knight overloaded defending two undefended rooks', () => {
-    const fen = '7k/8/5r2/3n4/1r6/8/8/K7 w - - 0 1';
+  // Real production bug (reported against the live app): after
+  // 1.f4 Nc6 2.Nf3 Rb8, White's a1 rook is the sole defender of a2 and
+  // b1 — but that's true of nearly every untouched back rank before
+  // anything develops, since nothing else happens to cover those squares
+  // yet. Nothing black has comes anywhere close to threatening a2 or b1
+  // at this point, so this was never a real overload — just the opening
+  // position's ordinary geometry misread as a tactical weakness, and the
+  // app told the user a perfectly normal move (e3) was a "Mistake"
+  // because of it. Fixed by requiring the dependent squares to be
+  // genuinely contested (attacked by the opponent right now), not just
+  // structurally sole-defended.
+  it('does not flag an untouched back-rank rook as overloaded when nothing threatens its neighbors', () => {
+    const g = new Chess();
+    g.move('f4'); g.move('Nc6'); g.move('Nf3'); g.move('Rb8');
+    const result = detectOverloadedDefender(g.fen(), 'w');
+    expect(result).toBeNull();
+  });
+
+  it('finds a knight overloaded defending two rooks that are each genuinely under attack', () => {
+    // Same shape as before, but now white has real attackers on both
+    // dependent squares (rook on b1 eyeing b4, queen on f1 eyeing f6) —
+    // an actually exploitable overload, not just static defensive coverage.
+    const fen = '7k/8/5r2/3n4/1r6/8/8/KR3Q2 w - - 0 1';
     const result = detectOverloadedDefender(fen, 'b');
     expect(result).not.toBeNull();
     expect(result.motif).toBe('overloaded defender');
@@ -198,10 +219,11 @@ describe('detectOverloadedDefender', () => {
     expect(result.dependentSquares.sort()).toEqual(['b4', 'f6']);
   });
 
-  it('does not fire when the two pieces defend each other too (not sole-dependent on a third piece)', () => {
+  it('does not fire when the two pieces defend each other too (not sole-dependent on a third piece), even when both are contested', () => {
     // Both rooks share the 6th rank, so each also defends the other —
-    // neither is *solely* dependent on the knight.
-    const fen = '7k/8/1r3r2/3n4/8/8/8/K7 w - - 0 1';
+    // neither is *solely* dependent on the knight, even though white has
+    // real attackers on both squares (rook on b1, queen on f1).
+    const fen = '7k/8/1r3r2/3n4/8/8/8/KR3Q2 w - - 0 1';
     const result = detectOverloadedDefender(fen, 'b');
     expect(result).toBeNull();
   });
