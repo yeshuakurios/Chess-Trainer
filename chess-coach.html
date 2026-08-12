@@ -829,8 +829,12 @@ async function finishEngineMove(san, fenBeforeEngine){
   playMoveSound(!!emv.captured);
   if(/\+|#/.test(emv.san)) buzz([30,40,30]);
   sessionMoves.push({san:emv.san, grade:null, loss:0, fenBefore:fenBeforeEngine, fenAfter:game.fen(), best:null, by:'opponent'});
-  render();
+  // Unlock before rendering, not after — render() reads boardLocked to decide
+  // between "Analyzing…" and "Your move", so rendering first left the turn
+  // indicator stuck on "Analyzing…" until some unrelated click forced a
+  // re-render, even though the board was already usable again.
   boardLocked=false;
+  render();
   if(game.game_over()) finishGame();
 }
 
