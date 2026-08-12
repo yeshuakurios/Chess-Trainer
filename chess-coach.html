@@ -6,6 +6,9 @@
 <title>Second Board — Chess Coach</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js"></script>
+<script src="src/fallback-engine.js"></script>
+<script src="src/engine.js"></script>
+<script src="src/grading.js"></script>
 <style>
 :root{
   --ink:#0f1620;
@@ -409,280 +412,18 @@ document.querySelectorAll('nav.tabs button').forEach(btn=>{
 });
 
 /* ============================================================
-   STOCKFISH (UCI) WRAPPER
-   ------------------------------------------------------------
-   Wraps the WASM engine in a promise-based queue. If the engine
-   fails to load for any reason, engineReady stays false and the
-   app transparently falls back to the built-in minimax.
+   STOCKFISH (UCI) WRAPPER — moved to src/engine.js
+   (sf, engineReady, sfQueue, sfCurrent, sfBuffer, sfSend, initEngine,
+   handleEngineLine, processQueue, sfAnalyze, uciToMove, scoreToPawns)
    ============================================================ */
-let sf = null;
-let engineReady = false;
-let sfQueue = [];
-let sfCurrent = null;
-let sfBuffer = {bestmove:null, cp:null, mate:null, depth:0};
-
-function sfSend(cmd){
-  if(!sf) return;
-  try{
-    if(typeof sf.postMessage === 'function') sf.postMessage(cmd);
-    else if(typeof sf === 'function') sf(cmd);
-  }catch(e){ console.warn('engine send failed', e); }
-}
-
-function initEngine(){
-  return new Promise((resolve)=>{
-    let settled = false;
-    const done = (ok)=>{ if(!settled){ settled=true; engineReady=ok; resolve(ok); } };
-
-    try{
-      if(typeof STOCKFISH === 'function'){
-        sf = STOCKFISH();
-      } else if(typeof Stockfish === 'function'){
-        sf = Stockfish();
-      } else {
-        return done(false);
-      }
-    }catch(e){ return done(false); }
-
-    const handler = (event)=>{
-      const line = (typeof event === 'string') ? event : (event && event.data);
-      if(typeof line !== 'string') return;
-      handleEngineLine(line, done);
-    };
-
-    if(sf.addEventListener) sf.addEventListener('message', handler);
-    else sf.onmessage = handler;
-
-    sfSend('uci');
-    // If the engine never answers, fall back rather than hanging forever.
-    setTimeout(()=>done(engineReady), 8000);
-  });
-}
-
-function handleEngineLine(line, done){
-  if(line.startsWith('uciok')){
-    sfSend('setoption name Threads value 1');
-    sfSend('isready');
-    return;
-  }
-  if(line.startsWith('readyok')){
-    if(done) done(true);
-    processQueue();
-    return;
-  }
-  if(line.startsWith('info')){
-    // Track the deepest score seen for this search
-    const dMatch = line.match(/ depth (\d+)/);
-    const cpMatch = line.match(/score cp (-?\d+)/);
-    const mateMatch = line.match(/score mate (-?\d+)/);
-    const d = dMatch ? parseInt(dMatch[1],10) : 0;
-    if(d >= sfBuffer.depth){
-      sfBuffer.depth = d;
-      if(cpMatch){ sfBuffer.cp = parseInt(cpMatch[1],10); sfBuffer.mate = null; }
-      if(mateMatch){ sfBuffer.mate = parseInt(mateMatch[1],10); sfBuffer.cp = null; }
-    }
-    return;
-  }
-  if(line.startsWith('bestmove')){
-    const parts = line.split(/\s+/);
-    sfBuffer.bestmove = parts[1] && parts[1] !== '(none)' ? parts[1] : null;
-    if(sfCurrent){
-      sfCurrent.resolve({
-        bestmove: sfBuffer.bestmove,
-        cp: sfBuffer.cp,
-        mate: sfBuffer.mate
-      });
-      sfCurrent = null;
-    }
-    processQueue();
-    return;
-  }
-}
-
-function processQueue(){
-  if(sfCurrent || sfQueue.length===0 || !sf) return;
-  sfCurrent = sfQueue.shift();
-  sfBuffer = {bestmove:null, cp:null, mate:null, depth:0};
-  sfSend('position fen ' + sfCurrent.fen);
-  if(sfCurrent.uciElo !== null && sfCurrent.uciElo !== undefined){
-    sfSend('setoption name UCI_LimitStrength value true');
-    sfSend('setoption name UCI_Elo value ' + sfCurrent.uciElo);
-    sfSend('setoption name Skill Level value 20');
-  } else {
-    // Full-strength grading pass: no limiter, no artificial weakening.
-    sfSend('setoption name UCI_LimitStrength value false');
-    sfSend('setoption name Skill Level value 20');
-  }
-  sfSend('go depth ' + sfCurrent.depth);
-}
-
-// Analyze a position. Returns {bestmove(uci), cp, mate} with score
-// ALWAYS from the perspective of the side to move in that FEN.
-// Pass uciElo to weaken the engine toward a target Elo (opponent moves).
-// Omit it entirely for full-strength grading analysis.
-// Times out after 6s so a stuck/misbehaving engine can never hang the app —
-// this is what silently broke the bot's turn with no fallback triggering.
-function sfAnalyze(fen, depth, uciElo){
-  if(!engineReady) return Promise.resolve(null);
-  return new Promise((resolve)=>{
-    let settled = false;
-    const done = (val)=>{
-      if(settled) return;
-      settled = true;
-      resolve(val);
-    };
-    const timeoutId = setTimeout(()=>{
-      // Engine never answered — drop it from the queue if it's still pending/current
-      // so it doesn't block everything that comes after it, and fail soft.
-      sfQueue = sfQueue.filter(q => q.resolve !== wrappedResolve);
-      if(sfCurrent && sfCurrent.resolve === wrappedResolve){
-        sfCurrent = null;
-        processQueue();
-      }
-      console.warn('Engine analysis timed out — falling back.');
-      done(null);
-    }, 6000);
-    const wrappedResolve = (val)=>{
-      clearTimeout(timeoutId);
-      done(val);
-    };
-    sfQueue.push({fen, depth, uciElo:(uciElo===undefined?null:uciElo), resolve:wrappedResolve});
-    processQueue();
-  });
-}
-
-// Convert a UCI move string (e2e4, e7e8q) into a SAN move on a given FEN
-function uciToMove(fen, uci){
-  if(!uci) return null;
-  const g = new Chess(fen);
-  const from = uci.slice(0,2), to = uci.slice(2,4);
-  const promo = uci.length>4 ? uci[4] : undefined;
-  const mv = g.move({from, to, promotion: promo || 'q'});
-  return mv;
-}
-
-// Normalize an engine score to pawns, from the perspective of the side to move.
-function scoreToPawns(res){
-  if(!res) return null;
-  if(res.mate !== null && res.mate !== undefined){
-    return res.mate > 0 ? 100 : -100;   // treat mate as overwhelming
-  }
-  if(res.cp !== null && res.cp !== undefined) return res.cp/100;
-  return null;
-}
-
 /* ============================================================
    CHESS ENGINE HELPERS
    ============================================================ */
-const VALUES = {p:1,n:3,b:3,r:5,q:9,k:0};
+// VALUES moved to src/fallback-engine.js
 const PIECE_GLYPH = { p:'\u265F', r:'\u265C', n:'\u265E', b:'\u265D', q:'\u265B', k:'\u265A' };
 const files = ['a','b','c','d','e','f','g','h'];
 
-const MATE_SCORE = 10000;
-
-function evaluate(g){
-  // Terminal positions dominate any material count.
-  if(g.in_checkmate()){
-    // Side to move is checkmated, so the OTHER side won.
-    return g.turn()==='w' ? -MATE_SCORE : MATE_SCORE;
-  }
-  if(g.in_stalemate() || g.in_draw() || g.in_threefold_repetition() || g.insufficient_material()){
-    return 0;
-  }
-  let score = 0;
-  const b = g.board();
-  for(let r=0;r<8;r++) for(let f=0;f<8;f++){
-    const pc = b[r][f];
-    if(pc){
-      const v = VALUES[pc.type];
-      score += pc.color==='w' ? v : -v;
-    }
-  }
-  // small castling bonus
-  const hist = g.history();
-  if(hist.includes('O-O') || hist.includes('O-O-O')){
-    // can't tell which color easily post-hoc cheaply; skip fine-grained, use small flat nudge
-  }
-  return score;
-}
-
-function minimax(g, depth, alpha, beta, maximizing){
-  if(depth===0 || g.game_over()) return evaluate(g);
-  const moves = g.moves();
-  if(maximizing){
-    let maxEval = -Infinity;
-    for(const m of moves){
-      g.move(m);
-      const ev = minimax(g, depth-1, alpha, beta, false);
-      g.undo();
-      maxEval = Math.max(maxEval, ev);
-      alpha = Math.max(alpha, ev);
-      if(beta<=alpha) break;
-    }
-    return maxEval;
-  } else {
-    let minEval = Infinity;
-    for(const m of moves){
-      g.move(m);
-      const ev = minimax(g, depth-1, alpha, beta, true);
-      g.undo();
-      minEval = Math.min(minEval, ev);
-      beta = Math.min(beta, ev);
-      if(beta<=alpha) break;
-    }
-    return minEval;
-  }
-}
-
-// Returns ranked list of {move, score} for every legal move at current position, from white's-perspective score
-function searchRoot(g, depth){
-  const moves = g.moves({verbose:true});
-  const ranked = [];
-  for(const m of moves){
-    g.move(m.san);
-    const score = minimax(g, depth-1, -Infinity, Infinity, g.turn()==='w');
-    g.undo();
-    ranked.push({san:m.san, from:m.from, to:m.to, flags:m.flags, captured:m.captured, score});
-  }
-  ranked.sort((a,b)=> g.turn()==='w' ? b.score-a.score : a.score-b.score);
-  return ranked;
-}
-
-/* ============================================================
-   ELO -> ENGINE STRENGTH MAPPING
-   ============================================================ */
-// Stockfish's own UCI_Elo strength limiter targets a real Elo directly,
-// rather than us guessing at a Skill Level -> Elo mapping.
-// UCI_Elo is honored roughly in the 1320-3190 range; below that we still
-// enable UCua_LimitStrength but also drop Skill Level and depth hard,
-// since UCI_Elo itself won't go low enough for true beginners.
-function engineParamsForElo(elo){
-  const clampedElo = Math.max(1320, Math.min(3190, Math.round(elo)));
-  const depth = Math.max(4, Math.min(16, Math.round(4 + (elo-700)/140)));
-  // legacy fallback params for the built-in minimax
-  const fbDepth = Math.max(1, Math.min(3, 1 + Math.floor((elo-700)/450)));
-  const blunderChance = Math.max(0.03, Math.min(0.45, 0.42 - (elo-600)/2600));
-  return {uciElo: clampedElo, depth, fbDepth, blunderChance};
-}
-
-function pickEngineMove(g, elo){
-  // IMPORTANT: use fbDepth here, not depth. `depth` is sized for Stockfish
-  // (4-16 plies with proper pruning); this fallback is a brute-force minimax
-  // with no move ordering, so anything past ~3 plies never finishes on a phone.
-  // This mismatch is what caused the bot to hang silently in "Basic engine" mode.
-  const {fbDepth, blunderChance} = engineParamsForElo(elo);
-  // Hard clamp as a second line of defense — this fallback minimax must never
-  // run past depth 3 or it can hang the tab regardless of what's passed in.
-  const safeDepth = Math.max(1, Math.min(3, fbDepth));
-  const ranked = searchRoot(g, safeDepth);
-  if(ranked.length===0) return null;
-  if(Math.random() < blunderChance && ranked.length>1){
-    // pick a suboptimal move to simulate a weaker player, biased toward the worse half
-    const idx = Math.min(ranked.length-1, Math.floor(Math.random()*ranked.length*0.7)+1);
-    return ranked[idx];
-  }
-  return ranked[0];
-}
+// MATE_SCORE, evaluate, minimax, searchRoot, engineParamsForElo, pickEngineMove moved to src/fallback-engine.js
 
 /* ============================================================
    MOVE GRADING
@@ -697,39 +438,7 @@ const GRADE_META = {
   blunder:   {label:'Blunder', color:'var(--blunder)'}
 };
 
-// Grading thresholds scale with the player's rating: the same 100-centipawn
-// slip is a minor inaccuracy for a beginner and a real mistake for a 1900.
-// ratingFactor > 1 tightens thresholds (stronger players held to a stricter bar);
-// ratingFactor < 1 loosens them (beginners aren't blundered for normal noise).
-function thresholdFactorForRating(rating){
-  if(!rating) return 1;                 // no rating yet (diagnostic game) -> neutral
-  const r = Math.max(600, Math.min(2400, rating));
-  // 1000 rating -> factor ~0.6 (looser), 1800 -> factor 1.0, 2400 -> factor ~1.35
-  return Math.max(0.55, Math.min(1.4, 0.6 + (r-1000)/1400*0.8));
-}
-
-// loss is in pawns, from the mover's perspective (positive = worse for mover)
-function classify(loss, wasTop, sacrificed, deliversMate, ratingFactor){
-  const f = (ratingFactor===undefined || ratingFactor===null) ? 1 : ratingFactor;
-  if(deliversMate) return 'brilliant';
-  if(wasTop && sacrificed && loss<=0.2*f) return 'brilliant';
-  if(loss<=0.05*f) return 'best';
-  if(loss<=0.15*f) return 'great';
-  if(loss<=0.35*f) return 'good';
-  if(loss<=0.75*f) return 'inaccuracy';
-  if(loss<=1.75*f) return 'mistake';
-  return 'blunder';
-}
-
-function tagMistake(g, moverColor, opponentBestReply){
-  if(opponentBestReply && opponentBestReply.captured){
-    const v = VALUES[opponentBestReply.captured];
-    if(v>=3) return 'Hanging a piece';
-    return 'Dropped a pawn';
-  }
-  if(opponentBestReply && /\+/.test(opponentBestReply.san)) return 'King safety lapse';
-  return 'Positional inaccuracy';
-}
+// thresholdFactorForRating, classify, tagMistake moved to src/grading.js
 
 /* ============================================================
    OPENING BOOK (compact, common lines)
@@ -965,92 +674,7 @@ function checkOpeningBook(mv, loss){
   }
 }
 
-function pieceName(t){
-  return {p:'pawn',n:'knight',b:'bishop',r:'rook',q:'queen',k:'king'}[t] || 'piece';
-}
-
-// What does the opponent threaten in the CURRENT position (after your move)?
-function findThreats(g){
-  const replies = g.moves({verbose:true});
-  let bestCapture = null;
-  let checkReply = null;
-  for(const r of replies){
-    if(r.captured){
-      // is the capturing square defended by us? crude: simulate capture, see if we can recapture
-      g.move(r.san);
-      const recaptures = g.moves({verbose:true}).filter(m=>m.to===r.to);
-      const bestRecapture = recaptures.length ? Math.max(...recaptures.map(m=>VALUES[g.get(m.to) ? g.get(m.to).type : 'p'])) : 0;
-      g.undo();
-      const gain = VALUES[r.captured] - (recaptures.length ? VALUES[r.piece] : 0);
-      if(!bestCapture || gain > bestCapture.gain){
-        bestCapture = {san:r.san, captured:r.captured, to:r.to, gain, defended:recaptures.length>0, piece:r.piece};
-      }
-    }
-    if(/\+/.test(r.san) && !checkReply) checkReply = r;
-  }
-  return {bestCapture, checkReply};
-}
-
-// Describe what a move accomplishes, in plain terms
-function describeMove(g, san){
-  const test = new Chess(g.fen());
-  const mv = test.move(san);
-  if(!mv) return '';
-  const parts = [];
-  if(mv.san.includes('#')) return 'it delivers checkmate';
-  if(mv.captured) parts.push(`it wins the ${pieceName(mv.captured)} on ${mv.to}`);
-  if(mv.san.includes('+')) parts.push('it comes with check, forcing a response');
-  if(mv.flags.includes('k') || mv.flags.includes('q')) parts.push('it castles, tucking the king to safety and connecting the rooks');
-
-  // does it create a threat?
-  const threats = findThreats(test);
-  if(threats.bestCapture && threats.bestCapture.gain>0 && !mv.captured){
-    parts.push(`it sets up a threat to win the ${pieceName(threats.bestCapture.captured)}`);
-  }
-  // central development
-  const centralSquares = ['d4','e4','d5','e5','c4','f4','c5','f5'];
-  if(!mv.captured && ['n','b'].includes(mv.piece) && parts.length===0){
-    parts.push(`it develops the ${pieceName(mv.piece)} toward the center`);
-  }
-  if(!mv.captured && mv.piece==='p' && centralSquares.includes(mv.to) && parts.length===0){
-    parts.push('it stakes out central space');
-  }
-  if(parts.length===0) parts.push('it improves the position without creating weaknesses');
-  return parts.slice(0,2).join(', and ');
-}
-
-// Explain WHY the played move lost value
-function explainLoss(preFEN, playedSan, bestSan, loss){
-  const before = new Chess(preFEN);
-  const after = new Chess(preFEN);
-  after.move(playedSan);
-
-  const threats = findThreats(after);
-  let why = '';
-
-  if(threats.bestCapture && threats.bestCapture.gain >= 1){
-    const c = threats.bestCapture;
-    if(!c.defended){
-      why = `It leaves your ${pieceName(c.captured)} on ${c.to} undefended — the opponent can simply play ${c.san} and take it for free.`;
-    } else {
-      why = `It allows ${c.san}, winning material on ${c.to} even after you recapture.`;
-    }
-  } else if(threats.checkReply){
-    why = `It exposes your king — the opponent has ${threats.checkReply.san}, and dealing with the check costs you time.`;
-  } else {
-    // did the played move miss an available capture?
-    const availableCaptures = before.moves({verbose:true}).filter(m=>m.captured);
-    const bestAvailable = availableCaptures.sort((a,b)=>VALUES[b.captured]-VALUES[a.captured])[0];
-    if(bestAvailable && VALUES[bestAvailable.captured]>=3 && bestAvailable.san!==playedSan){
-      why = `It passes up material that was on offer — the ${pieceName(bestAvailable.captured)} was available to take.`;
-    } else {
-      why = `It concedes ground positionally: the piece ends up less active, and the opponent gets a free hand to improve.`;
-    }
-  }
-
-  const bestWhy = bestSan ? ` Better was ${bestSan}, because ${describeMove(before, bestSan)}.` : '';
-  return why + bestWhy;
-}
+// pieceName, findThreats, describeMove, explainLoss moved to src/grading.js
 
 function showFeedback(grade, san, loss, playedEntry, bestEntry, preFEN){
   const meta = GRADE_META[grade];

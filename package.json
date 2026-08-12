@@ -1,0 +1,17 @@
+{
+  "name": "second-board",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Test harness for the Second Board chess coach app (chess-coach.html)",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
+  },
+  "dependencies": {
+    "chess.js": "0.10.3",
+    "stockfish": "10.0.2"
+  }
+}
