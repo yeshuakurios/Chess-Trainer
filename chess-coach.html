@@ -11,6 +11,7 @@
 <script src="src/tactics.js"></script>
 <script src="src/grading.js"></script>
 <script src="src/insights.js"></script>
+<script src="src/opening-explorer.js"></script>
 <style>
 :root{
   --ink:#0f1620;
@@ -699,7 +700,7 @@ async function makePlayerMove(from, to){
   const bestEntry = bestSan ? {san:bestSan} : null;
   showFeedback(grade, mv.san, loss, null, bestEntry, preMoveFEN, replySan);
 
-  checkOpeningBook(mv, loss);
+  checkOpeningBook(mv, loss, preMoveFEN); // async, fire-and-forget — never blocks move/grading flow
 
   let mistakeTag = null;
   if((grade==='mistake' || grade==='blunder') && !deliversMate){
@@ -736,11 +737,36 @@ async function makePlayerMove(from, to){
   }
 }
 
-function checkOpeningBook(mv, loss){
+// Layer 3.1: grades the opening move against what masters actually play
+// (Lichess Opening Explorer), not just against Stockfish's single top line.
+// Fire-and-forget from makePlayerMove() — this is a network round trip, and
+// nothing about the primary move/grading flow should wait on it. Falls back
+// to the old hand-written OPENING_BOOK only when the live call itself fails
+// (network error, timeout, unreachable) — not merely when the played move
+// happens to already be off-book, since "off-book but sound" is exactly
+// what the live data is for distinguishing from a real deviation.
+async function checkOpeningBook(mv, loss, preMoveFEN){
   const hist = game.history();
   const plyIndex = hist.length; // after this move was pushed
-  if(plyIndex>8) return; // only check first 8 plies
+  if(!withinOpeningWindow(plyIndex)) return;
   const priorHistory = hist.slice(0, plyIndex-1);
+
+  const explorerData = await fetchOpeningExplorer(preMoveFEN);
+  if(explorerData){
+    const classification = classifyOpeningMove(explorerData, mv.san);
+    if(classification && !classification.isSound && loss>0.3){
+      profile.openingMistakes.push({
+        line: priorHistory.join(' ') || '(start)',
+        played: mv.san,
+        note: openingMoveCallout(classification, mv.san)
+      });
+      if(profile.openingMistakes.length>40) profile.openingMistakes.shift();
+    }
+    return;
+  }
+
+  // Fallback: the API was unreachable — use the small hand-written book
+  // rather than silently giving up on opening feedback entirely.
   const key = bookKeyFor(priorHistory);
   const entry = OPENING_BOOK[key];
   if(!entry) return;
