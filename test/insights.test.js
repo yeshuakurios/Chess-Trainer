@@ -9,7 +9,8 @@ const {
   rankWeaknessesByLeverage, leverageCallout,
   phaseForMoveNumber, phaseBreakdown, phaseCallout,
   rankPiecesByLeverage, pieceCallout,
-  groupIntoSessions, sessionSummary, accuracyByPositionInSession, fatigueCallout
+  groupIntoSessions, sessionSummary, accuracyByPositionInSession, fatigueCallout,
+  expectedScore, calibrationDrift, calibrationCallout
 } = require('../src/insights.js');
 
 describe('rankWeaknessesByLeverage (Layer 2.1)', () => {
@@ -293,5 +294,73 @@ describe('accuracyByPositionInSession / fatigueCallout (Layer 2.3)', () => {
 
   it('returns an empty array for an empty gameLog', () => {
     expect(accuracyByPositionInSession([])).toEqual([]);
+  });
+});
+
+describe('expectedScore / calibrationDrift / calibrationCallout (Layer 2.5)', () => {
+  it('expectedScore matches the standard Elo formula (0.5 at equal ratings)', () => {
+    expect(expectedScore(1500, 1500)).toBeCloseTo(0.5, 10);
+    expect(expectedScore(1600, 1500)).toBeGreaterThan(0.5);
+    expect(expectedScore(1400, 1500)).toBeLessThan(0.5);
+  });
+
+  function winStreakHistory(n, {rating=1000, opponent=1025, result=1} = {}){
+    const history = [];
+    for(let i=0;i<n;i++){
+      history.push({rating, delta:0, opponent, result, date: `2026-01-0${(i%9)+1}T10:00:00.000Z`});
+    }
+    return history;
+  }
+
+  it('flags a sustained overperforming win streak as likely stale-low', () => {
+    const history = winStreakHistory(8); // 8 straight wins vs a +25 gap opponent, expected ~46%
+    const drift = calibrationDrift(history);
+    expect(drift.gameCount).toBe(8);
+    expect(drift.actualRate).toBe(1);
+    expect(drift.expectedRate).toBeCloseTo(expectedScore(1000, 1025), 10);
+    expect(drift.deviation).toBeGreaterThan(0.25);
+
+    const callout = calibrationCallout(history);
+    expect(callout).toMatch(/stale-low/);
+    expect(callout).toMatch(/re-run a calibration game/i);
+  });
+
+  it('flags a sustained underperforming streak as likely stale-high', () => {
+    const history = winStreakHistory(8, {result: 0});
+    const callout = calibrationCallout(history);
+    expect(callout).toMatch(/stale-high/);
+  });
+
+  it('does not flag performance that roughly matches expectation', () => {
+    // Alternating win/loss against an even-strength opponent: actual ~50%,
+    // expected ~50% — no meaningful drift.
+    const history = [];
+    for(let i=0;i<8;i++){
+      history.push({rating:1000, delta:0, opponent:1000, result: i%2===0?1:0, date:`2026-01-0${(i%9)+1}T10:00:00.000Z`});
+    }
+    expect(calibrationCallout(history)).toBeNull();
+  });
+
+  it('returns null with fewer than the minimum number of recent games', () => {
+    const history = winStreakHistory(5);
+    expect(calibrationDrift(history)).toBeNull();
+    expect(calibrationCallout(history)).toBeNull();
+  });
+
+  it('excludes the diagnostic game (delta: null) from the window', () => {
+    const diagnostic = [{rating:1000, delta:null, opponent:1200, result:1, date:'2026-01-01T09:00:00.000Z'}];
+    const history = diagnostic.concat(winStreakHistory(5));
+    // Only 5 post-diagnostic games qualify, still below the minimum of 6.
+    expect(calibrationDrift(history)).toBeNull();
+  });
+
+  it('only looks at the most recent windowSize games, not the entire history', () => {
+    const oldBadStreak = winStreakHistory(20, {result: 0}); // ancient underperformance
+    const recentGoodForm = winStreakHistory(8, {result: 1}); // recent overperformance
+    const history = oldBadStreak.concat(recentGoodForm);
+    const drift = calibrationDrift(history, 10);
+    expect(drift.gameCount).toBe(10);
+    // The window should be dominated by the recent win streak, not the old one.
+    expect(drift.actualRate).toBeGreaterThan(0.5);
   });
 });

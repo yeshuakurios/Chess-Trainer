@@ -265,6 +265,11 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
       <div class="stat-box"><div class="n" id="pStatAvgLoss">—</div><div class="l">Avg. centipawn loss</div></div>
     </div>
 
+    <div class="due-banner" id="calibrationBanner" style="display:none; text-align:left;">
+      <div id="calibrationBannerText" style="margin-bottom:8px;"></div>
+      <button class="big-btn secondary" id="btnRecalibrate" style="padding:8px;">Re-run calibration game</button>
+    </div>
+
     <div class="section-title">This session</div>
     <div class="feedback-text" id="fatigueCallout" style="display:none; margin-bottom:6px;"></div>
     <div class="ledger" id="sessionLedger"><div class="empty-note">Finish a game to see a session summary here.</div></div>
@@ -1002,6 +1007,16 @@ document.getElementById('btnNew').addEventListener('click', ()=>{
 document.getElementById('btnResign').addEventListener('click', ()=>{
   finishGame(true);
 });
+document.getElementById('btnRecalibrate').addEventListener('click', ()=>{
+  // Layer 2.5: drop back into the diagnostic flow so the next game
+  // recomputes profile.rating from scratch, same as the very first game.
+  profile.diagnosticDone = false;
+  saveProfile();
+  document.getElementById('gameArea').style.display='none';
+  document.getElementById('setupCard').style.display='block';
+  refreshSetupCard();
+  document.querySelector('nav.tabs button[data-tab="play"]').click();
+});
 
 function finishGame(resigned){
   boardLocked = true;
@@ -1123,6 +1138,15 @@ function refreshProgress(){
   document.getElementById('pStatWinPct').textContent = winPct;
   const avgCp = profile.totalMovesGraded>0 ? Math.round(100*profile.totalCpLoss/profile.totalMovesGraded) : null;
   document.getElementById('pStatAvgLoss').textContent = avgCp!==null ? avgCp : '—';
+
+  const calibrationBanner = document.getElementById('calibrationBanner');
+  const calibrationMsg = calibrationCallout(profile.ratingHistory);
+  if(calibrationMsg){
+    document.getElementById('calibrationBannerText').textContent = calibrationMsg;
+    calibrationBanner.style.display = 'block';
+  } else {
+    calibrationBanner.style.display = 'none';
+  }
 
   const sessionLedger = document.getElementById('sessionLedger');
   const fatigueCalloutEl = document.getElementById('fatigueCallout');

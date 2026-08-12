@@ -201,6 +201,52 @@ function fatigueCallout(gameLog, gapMinutes){
   return null;
 }
 
+/* ---------- 2.5: Calibration drift check ---------- */
+const CALIBRATION_WINDOW = 10;
+const CALIBRATION_MIN_GAMES = 6;
+const CALIBRATION_DRIFT_THRESHOLD = 0.25; // 25 percentage points
+
+// Standard Elo expected-score formula, same one finishGame() already uses.
+function expectedScore(rating, opponentElo){
+  return 1 / (1 + Math.pow(10, (opponentElo - rating) / 400));
+}
+
+// Compares actual win rate over the most recent post-diagnostic games
+// against what the Elo formula expected, using each game's OWN opponent
+// and pre-game rating (reconstructed as rating - delta) rather than
+// assuming a flat 50% — since ratingGap deliberately pitches opponents
+// above the player, true "expected" is usually somewhat under 50% already.
+function calibrationDrift(ratingHistory, windowSize){
+  const window = windowSize || CALIBRATION_WINDOW;
+  const postDiagnostic = (ratingHistory || []).filter(g => g.delta !== null && g.delta !== undefined);
+  const recent = postDiagnostic.slice(-window);
+  if(recent.length < CALIBRATION_MIN_GAMES) return null;
+
+  let actualSum = 0, expectedSum = 0;
+  for(const g of recent){
+    const preRating = g.rating - g.delta;
+    actualSum += g.result;
+    expectedSum += expectedScore(preRating, g.opponent);
+  }
+  const actualRate = actualSum / recent.length;
+  const expectedRate = expectedSum / recent.length;
+  return {gameCount: recent.length, actualRate, expectedRate, deviation: actualRate - expectedRate};
+}
+
+// "If someone's winning 80% of recent games, the rating may be stale-low.
+// Prompt: 'Want to re-run a calibration game?'" — only fires past a real
+// deviation threshold, in either direction (badly underperforming a
+// recalibrated rating is just as informative as badly overperforming one).
+function calibrationCallout(ratingHistory, windowSize){
+  const drift = calibrationDrift(ratingHistory, windowSize);
+  if(!drift) return null;
+  if(Math.abs(drift.deviation) < CALIBRATION_DRIFT_THRESHOLD) return null;
+  const actualPct = Math.round(drift.actualRate * 100);
+  const expectedPct = Math.round(drift.expectedRate * 100);
+  const staleDirection = drift.deviation > 0 ? 'stale-low' : 'stale-high';
+  return `You're winning ${actualPct}% of your last ${drift.gameCount} games (expected ~${expectedPct}%) — your rating may be ${staleDirection}. Want to re-run a calibration game?`;
+}
+
 // Node/Vitest can require() this file directly; the browser (classic
 // <script> tag, no `module` global) just skips this block.
 if(typeof module !== 'undefined' && module.exports){
@@ -208,6 +254,7 @@ if(typeof module !== 'undefined' && module.exports){
     rankWeaknessesByLeverage, leverageCallout,
     phaseForMoveNumber, phaseBreakdown, phaseCallout,
     rankPiecesByLeverage, pieceCallout,
-    groupIntoSessions, sessionSummary, accuracyByPositionInSession, fatigueCallout
+    groupIntoSessions, sessionSummary, accuracyByPositionInSession, fatigueCallout,
+    expectedScore, calibrationDrift, calibrationCallout
   };
 }
