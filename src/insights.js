@@ -247,6 +247,55 @@ function calibrationCallout(ratingHistory, windowSize){
   return `You're winning ${actualPct}% of your last ${drift.gameCount} games (expected ~${expectedPct}%) — your rating may be ${staleDirection}. Want to re-run a calibration game?`;
 }
 
+/* ---------- 2.6: Compare-to-past-self ---------- */
+// The 100-point band a rating falls in — 1547 -> 1500.
+function milestoneForRating(rating){
+  return Math.floor(rating / 100) * 100;
+}
+
+// Which 100-point milestones were newly reached this game, climbing from
+// oldRating to newRating. Only climbing counts — FEATURESPEC.md's example
+// is explicitly "back to 1500 after a dip", not falling below one.
+function crossedMilestones(oldRating, newRating){
+  if(newRating <= oldRating) return [];
+  const oldM = milestoneForRating(oldRating);
+  const newM = milestoneForRating(newRating);
+  const result = [];
+  for(let m = oldM + 100; m <= newM; m += 100) result.push(m);
+  return result;
+}
+
+// Per-tag before/after comparison between the current mistakeTags profile
+// and a stored snapshot from a past visit to the same milestone, sorted by
+// the size of the change (largest swings first, in either direction).
+function diffMistakeTags(currentTags, snapshotTags){
+  const cur = currentTags || {};
+  const snap = snapshotTags || {};
+  const allTags = new Set([...Object.keys(cur), ...Object.keys(snap)]);
+  const entries = [...allTags].map((tag) => {
+    const before = snap[tag] || 0;
+    const after = cur[tag] || 0;
+    return {tag, before, after, delta: after - before};
+  });
+  entries.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  return entries;
+}
+
+// A one-line "same number, different (or same) weaknesses" summary for the
+// milestone just re-reached, per FEATURESPEC.md's own framing.
+function compareToPastSelfCallout(milestone, diffEntries){
+  const meaningful = (diffEntries || []).filter(e => e.delta !== 0);
+  if(meaningful.length === 0){
+    return `You're back to ${milestone} with the exact same weakness profile as last time you were here.`;
+  }
+  const improved = meaningful.filter(e => e.delta < 0).sort((a, b) => a.delta - b.delta)[0];
+  const worsened = meaningful.filter(e => e.delta > 0).sort((a, b) => b.delta - a.delta)[0];
+  const parts = [`You're back to ${milestone}.`];
+  if(improved) parts.push(`"${improved.tag}" is down from ${improved.before} to ${improved.after} since last time you were here.`);
+  if(worsened) parts.push(`"${worsened.tag}" is up from ${worsened.before} to ${worsened.after}.`);
+  return parts.join(' ');
+}
+
 // Node/Vitest can require() this file directly; the browser (classic
 // <script> tag, no `module` global) just skips this block.
 if(typeof module !== 'undefined' && module.exports){
@@ -255,6 +304,7 @@ if(typeof module !== 'undefined' && module.exports){
     phaseForMoveNumber, phaseBreakdown, phaseCallout,
     rankPiecesByLeverage, pieceCallout,
     groupIntoSessions, sessionSummary, accuracyByPositionInSession, fatigueCallout,
-    expectedScore, calibrationDrift, calibrationCallout
+    expectedScore, calibrationDrift, calibrationCallout,
+    milestoneForRating, crossedMilestones, diffMistakeTags, compareToPastSelfCallout
   };
 }

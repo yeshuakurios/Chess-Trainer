@@ -227,6 +227,7 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
         <div class="feedback-text" id="resultNote"></div>
         <button class="big-btn" id="btnReview" style="margin-top:12px;">Review this game</button>
         <div class="feedback-text" id="recycleNote" style="margin-top:10px;"></div>
+        <div class="feedback-text" id="milestoneNote" style="margin-top:10px; display:none;"></div>
       </div>
 
       <div class="review-panel" id="reviewPanel">
@@ -320,6 +321,7 @@ const DEFAULT_PROFILE = {
   mistakesByPhase: {opening:0, middlegame:0, endgame:0},  // Layer 2.2
   mistakesByPiece: {},     // {p|n|b|r|q|k: count} — Layer 2.2
   mistakePieceCost: {},    // {p|n|b|r|q|k: cumulative centipawn loss} — Layer 2.2
+  milestoneSnapshots: {},  // {100-point rating: {mistakeTags, date}} — Layer 2.6 compare-to-past-self
   openingMistakes: [],    // [{line, played, note}]
   totalCpLoss: 0,
   totalMovesGraded: 0,
@@ -1038,6 +1040,7 @@ function finishGame(resigned){
   profile.totalCpLoss += sessionCpLossTotal;
   profile.totalMovesGraded += sessionMovesGraded;
   let gameDelta = null; // stays null for the diagnostic game, same convention as ratingHistory
+  let milestoneMessage = null; // Layer 2.6 compare-to-past-self, set only when a milestone is re-crossed
 
   if(!profile.diagnosticDone){
     // Compute initial rating estimate from result + average centipawn loss quality
@@ -1068,11 +1071,28 @@ function finishGame(resigned){
     // it settles toward a normal K=24 once you've played enough games to trust the number.
     const gamesSoDiagnostic = profile.gamesPlayed; // games played AFTER diagnostic so far
     const K = gamesSoDiagnostic < 5 ? 48 : gamesSoDiagnostic < 15 ? 32 : 24;
+    const oldRating = profile.rating;
     const newRating = Math.round(profile.rating + K*(result-expected));
     const delta = newRating - profile.rating;
     gameDelta = delta;
     profile.rating = Math.max(300, newRating);
     profile.gamesPlayed += 1;
+
+    // Compare-to-past-self (Layer 2.6): climbing back to a rating milestone
+    // reached before compares the current weakness profile against a
+    // snapshot taken the last time that milestone was reached, then
+    // updates the snapshot to this visit for next time.
+    for(const milestone of crossedMilestones(oldRating, profile.rating)){
+      const snapshot = profile.milestoneSnapshots[milestone];
+      if(snapshot){
+        const diff = diffMistakeTags(profile.mistakeTags, snapshot.mistakeTags);
+        milestoneMessage = compareToPastSelfCallout(milestone, diff);
+      }
+      profile.milestoneSnapshots[milestone] = {
+        mistakeTags: JSON.parse(JSON.stringify(profile.mistakeTags)),
+        date: new Date().toISOString()
+      };
+    }
     if(result===1) profile.wins++; else if(result===0.5) profile.draws++; else profile.losses++;
 
     // Update streak, then let the streak drive next game's rating gap.
@@ -1117,6 +1137,14 @@ function finishGame(resigned){
   document.getElementById('recycleNote').textContent = errCount>0
     ? `${errCount} position${errCount===1?'':'s'} saved to your drill queue — you'll re-attempt them in the Drills tab.`
     : 'No mistakes or blunders this game — nothing added to the drill queue.';
+
+  const milestoneNoteEl = document.getElementById('milestoneNote');
+  if(milestoneMessage){
+    milestoneNoteEl.textContent = milestoneMessage;
+    milestoneNoteEl.style.display = 'block';
+  } else {
+    milestoneNoteEl.style.display = 'none';
+  }
 
   const reviewBtn = document.getElementById('btnReview');
   reviewBtn.onclick = ()=> openReview(sessionMoves.slice());

@@ -10,7 +10,8 @@ const {
   phaseForMoveNumber, phaseBreakdown, phaseCallout,
   rankPiecesByLeverage, pieceCallout,
   groupIntoSessions, sessionSummary, accuracyByPositionInSession, fatigueCallout,
-  expectedScore, calibrationDrift, calibrationCallout
+  expectedScore, calibrationDrift, calibrationCallout,
+  milestoneForRating, crossedMilestones, diffMistakeTags, compareToPastSelfCallout
 } = require('../src/insights.js');
 
 describe('rankWeaknessesByLeverage (Layer 2.1)', () => {
@@ -362,5 +363,66 @@ describe('expectedScore / calibrationDrift / calibrationCallout (Layer 2.5)', ()
     expect(drift.gameCount).toBe(10);
     // The window should be dominated by the recent win streak, not the old one.
     expect(drift.actualRate).toBeGreaterThan(0.5);
+  });
+});
+
+describe('milestoneForRating / crossedMilestones (Layer 2.6)', () => {
+  it('floors a rating to its 100-point band', () => {
+    expect(milestoneForRating(1547)).toBe(1500);
+    expect(milestoneForRating(1500)).toBe(1500);
+    expect(milestoneForRating(1499)).toBe(1400);
+  });
+
+  it('lists every milestone newly crossed while climbing', () => {
+    expect(crossedMilestones(1470, 1512)).toEqual([1500]);
+    expect(crossedMilestones(1470, 1620)).toEqual([1500, 1600]);
+  });
+
+  it('returns an empty list when the rating did not climb', () => {
+    expect(crossedMilestones(1500, 1500)).toEqual([]);
+    expect(crossedMilestones(1550, 1480)).toEqual([]); // fell, doesn't count
+  });
+
+  it('returns an empty list when climbing without reaching a new 100-band', () => {
+    expect(crossedMilestones(1510, 1540)).toEqual([]);
+  });
+});
+
+describe('diffMistakeTags / compareToPastSelfCallout (Layer 2.6)', () => {
+  it('computes before/after/delta per tag, sorted by size of change', () => {
+    const current = {'Walked into a fork': 1, 'Dropped a pawn': 8};
+    const snapshot = {'Walked into a fork': 5, 'Dropped a pawn': 6};
+    const diff = diffMistakeTags(current, snapshot);
+    // fork: 5->1 (delta -4), pawn: 6->8 (delta +2) — fork's swing is larger.
+    expect(diff[0].tag).toBe('Walked into a fork');
+    expect(diff[0].delta).toBe(-4);
+    expect(diff[1].tag).toBe('Dropped a pawn');
+    expect(diff[1].delta).toBe(2);
+  });
+
+  it('includes a tag that is new since the snapshot (before: 0)', () => {
+    const diff = diffMistakeTags({'Walked into a pin': 3}, {});
+    expect(diff[0]).toEqual({tag:'Walked into a pin', before:0, after:3, delta:3});
+  });
+
+  it('includes a tag that disappeared since the snapshot (after: 0)', () => {
+    const diff = diffMistakeTags({}, {'Walked into a pin': 3});
+    expect(diff[0]).toEqual({tag:'Walked into a pin', before:3, after:0, delta:-3});
+  });
+
+  it('callout reports the exact-same-profile case when nothing changed', () => {
+    const diff = diffMistakeTags({'Dropped a pawn': 4}, {'Dropped a pawn': 4});
+    expect(compareToPastSelfCallout(1500, diff)).toMatch(/exact same weakness profile/i);
+  });
+
+  it('callout names both an improved and a worsened tag when both exist', () => {
+    const diff = diffMistakeTags(
+      {'Walked into a fork': 1, 'Dropped a pawn': 8},
+      {'Walked into a fork': 5, 'Dropped a pawn': 6}
+    );
+    const callout = compareToPastSelfCallout(1500, diff);
+    expect(callout).toContain('1500');
+    expect(callout).toMatch(/"Walked into a fork" is down from 5 to 1/);
+    expect(callout).toMatch(/"Dropped a pawn" is up from 6 to 8/);
   });
 });
