@@ -241,3 +241,52 @@ describe('detectSacrifice / materialDiff / sacrificeTier (Layer 1.2)', () => {
     expect(materialDiff(g, 'b')).toBe(0);
   });
 });
+
+// Layer 1.3: "once a move is graded and stored, that grade is permanent" —
+// directly answers the #1-ranked complaint from the competitive research
+// (Chess.com's move labels changing on re-analysis, eroding trust in
+// "Brilliant"). classify() and tagMistake() are pure functions with no
+// persistence of their own; the app enforces stability by calling them
+// exactly once per move (verified by inspecting chess-coach.html: classify(
+// is called from a single call site in makePlayerMove(), tagMistake( from
+// two call sites that both run at grading/save time, never on
+// already-stored data) and storing the returned string as plain data
+// (sessionMoves[].grade, profile.savedMistakes[].tag) rather than storing
+// the inputs and re-deriving the label on every render. These tests exist
+// to demonstrate WHY that storage pattern matters: classify() itself is
+// deterministic given fixed inputs, but ratingFactor legitimately changes
+// as profile.rating changes between games — so if a caller ever "helpfully"
+// re-ran classify() against a historical move using the CURRENT
+// ratingFactor instead of reading the stored grade, the label really would
+// shift under the user, exactly like the complaint this layer answers.
+describe('grade stability (Layer 1.3)', () => {
+  it('classify() is deterministic: identical inputs always produce the identical grade', () => {
+    const args = [0.4, false, false, false, 0.8];
+    const first = classify(...args);
+    for (let i = 0; i < 20; i++) {
+      expect(classify(...args)).toBe(first);
+    }
+  });
+
+  it('demonstrates the real risk this layer guards against: the SAME loss legitimately grades differently under a different ratingFactor', () => {
+    // This is exactly why a stored grade must never be recomputed against
+    // a later ratingFactor — if it were, this is the kind of shift a user
+    // would see happen to an already-shown "Blunder" or "Brilliant" label.
+    const loss = 0.5;
+    const gradeAsBeginner = classify(loss, false, false, false, thresholdFactorForRating(1000));
+    const gradeAsExpert = classify(loss, false, false, false, thresholdFactorForRating(2200));
+    expect(gradeAsBeginner).not.toBe(gradeAsExpert);
+  });
+
+  it('a grade computed and "stored" at move time is unaffected by a later rating change (simulated)', () => {
+    const loss = 0.5;
+    const ratingAtGradingTime = 1000;
+    const storedGrade = classify(loss, false, false, false, thresholdFactorForRating(ratingAtGradingTime));
+
+    // Simulate the rating updating after the game, as it does in
+    // finishGame() — the already-stored grade must not be touched by this.
+    const ratingAfterUpdate = 1600;
+    expect(thresholdFactorForRating(ratingAfterUpdate)).not.toBe(thresholdFactorForRating(ratingAtGradingTime));
+    expect(storedGrade).toBe(classify(loss, false, false, false, thresholdFactorForRating(ratingAtGradingTime)));
+  });
+});

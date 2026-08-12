@@ -51,6 +51,18 @@ function thresholdFactorForRating(rating){
 // did the opposite — it shrank thresholds for beginners, grading them MORE
 // harshly than strong players for an identical loss, backwards from the
 // intent described in HANDOFF.md ("beginners aren't blundered for normal noise").
+//
+// STABILITY INVARIANT (FEATURESPEC.md Layer 1.3): classify()'s return value
+// is meant to be computed exactly once per move, at grading time, and
+// stored as a plain string from then on (sessionMoves[].grade,
+// profile.savedMistakes[].tag via tagMistake(), profile.gameLog). Never
+// call classify()/tagMistake() again on a move already graded just to
+// "refresh" it against a since-changed profile.rating, ratingFactor, or
+// engine — that's exactly the "Brilliant labels change on re-analysis"
+// complaint from the competitive research (HANDOFF.md), the #1-ranked
+// complaint across the category. If thresholds change, that only ever
+// affects the classify() call for the NEXT move being graded; every
+// already-stored grade stays exactly what it was computed as.
 function classify(loss, wasTop, sacrificed, deliversMate, ratingFactor){
   const f = (ratingFactor===undefined || ratingFactor===null) ? 1 : ratingFactor;
   if(deliversMate) return 'brilliant';
@@ -210,6 +222,10 @@ function describeMotif(motif){
 // buckets (Hanging a piece / Dropped a pawn / King safety lapse /
 // Positional inaccuracy) when no specific motif is detected — e.g. a slow
 // positional slip rather than a concrete tactic.
+// Same stability invariant as classify() above: call this once per mistake,
+// at grading time, and store the returned string. Never re-tag a mistake
+// already saved to profile.savedMistakes — the tag shown when a drill was
+// first queued must still match the tag shown when it's later recycled.
 function tagMistake(fenBeforePlayerMove, fenBeforeReply, replySan, playerColor){
   const motif = classifyTacticalMotif(fenBeforePlayerMove, fenBeforeReply, replySan, playerColor);
   if(motif) return motifTagLabel(motif);
