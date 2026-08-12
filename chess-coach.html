@@ -1,0 +1,1820 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Second Board — Chess Coach</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js"></script>
+<style>
+:root{
+  --ink:#0f1620;
+  --panel:#161f2b;
+  --panel2:#1c2733;
+  --line:#2c3b4a;
+  --gold:#d3a94e;
+  --gold-dim:#8a733c;
+  --text:#eef1f4;
+  --dim:#8fa0ac;
+  --white-sq:#e7ecf0;
+  --black-sq:#5c7285;
+  --best:#5fb287;
+  --great:#6fae5f;
+  --good:#8fae5f;
+  --inacc:#d9b24c;
+  --mistake:#d98a3c;
+  --blunder:#d9503c;
+  --brilliant:#4fb2c9;
+}
+*{box-sizing:border-box;}
+body{
+  margin:0;
+  background:radial-gradient(ellipse at top, #1a2530 0%, #0b1117 70%);
+  color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  min-height:100vh;
+  padding-bottom:70px;
+}
+.wrap{max-width:520px;margin:0 auto;padding:16px 14px;}
+header{text-align:center;margin-bottom:14px;}
+.eyebrow{font-size:10px;letter-spacing:3px;text-transform:uppercase;color:var(--gold);margin-bottom:4px;}
+h1{margin:0;font-size:24px;font-weight:700;letter-spacing:.2px;}
+.rating-strip{
+  display:flex;justify-content:center;gap:18px;margin-top:10px;
+  font-size:12px;color:var(--dim);
+}
+.rating-strip b{color:var(--gold);font-size:16px;display:block;}
+.toggle-row{display:flex;gap:8px;justify-content:center;margin-top:10px;}
+.toggle{
+  background:var(--panel2);border:1px solid var(--line);color:var(--dim);
+  font-size:11px;padding:5px 12px;border-radius:20px;cursor:pointer;letter-spacing:.3px;
+}
+.toggle.on{border-color:var(--gold-dim);color:var(--gold);}
+
+nav.tabs{
+  display:flex;gap:6px;margin-bottom:16px;
+  background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:4px;
+}
+nav.tabs button{
+  flex:1;background:transparent;border:none;color:var(--dim);
+  padding:9px 4px;font-size:13px;border-radius:6px;cursor:pointer;font-weight:600;
+}
+nav.tabs button.active{background:var(--gold);color:#241a05;}
+
+.view{display:none;}
+.view.active{display:block;}
+
+/* --- Play view --- */
+.setup-card{
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:16px;margin-bottom:14px;text-align:center;
+}
+.setup-card p{color:var(--dim);font-size:13.5px;line-height:1.5;margin:6px 0 14px;}
+.color-pick{display:flex;gap:8px;margin-bottom:10px;}
+.color-pick button{
+  flex:1;padding:12px;border-radius:8px;border:1px solid var(--line);
+  background:var(--panel2);color:var(--text);font-size:14px;cursor:pointer;
+}
+.color-pick button.sel{border-color:var(--gold);background:#2a2210;color:var(--gold);}
+.big-btn{
+  width:100%;padding:13px;border-radius:8px;border:none;
+  background:var(--gold);color:#241a05;font-weight:700;font-size:14.5px;cursor:pointer;
+}
+.big-btn.secondary{background:transparent;border:1px solid var(--gold-dim);color:var(--gold);}
+
+.diag-badge{
+  display:inline-block;background:#2a2210;color:var(--gold);border:1px solid var(--gold-dim);
+  font-size:11px;letter-spacing:1px;text-transform:uppercase;padding:4px 10px;border-radius:20px;margin-bottom:8px;
+}
+
+.board-frame{background:linear-gradient(160deg,#25384a,#111a24);padding:10px;border-radius:6px;margin-bottom:10px;box-shadow:0 10px 26px rgba(0,0,0,.5);}
+.board{display:grid;grid-template-columns:repeat(8,1fr);grid-template-rows:repeat(8,1fr);aspect-ratio:1/1;border:2px solid #0d151d;}
+.sq{display:flex;align-items:center;justify-content:center;position:relative;cursor:pointer;user-select:none;}
+.sq.light{background:var(--white-sq);}
+.sq.dark{background:var(--black-sq);}
+.sq .piece{font-size:min(8vw,36px);line-height:1;pointer-events:none;font-family:"Segoe UI Symbol","Apple Symbols",sans-serif;}
+.piece-white{color:#fdfaf2;-webkit-text-stroke:1.3px #2a2018;}
+.piece-black{color:#1b140c;-webkit-text-stroke:1px #000;}
+.sq.selected{box-shadow:inset 0 0 0 3px var(--gold);}
+.sq.legal::after{content:'';position:absolute;width:24%;height:24%;border-radius:50%;background:rgba(211,169,78,.55);}
+.sq.legal.has-piece::after{width:90%;height:90%;border-radius:0;background:transparent;box-shadow:inset 0 0 0 4px rgba(217,80,60,.55);}
+.sq.lastmove{background:#d3a94e55;}
+
+.status-row{display:flex;justify-content:space-between;font-size:12px;color:var(--dim);margin-bottom:10px;}
+.status-row .turn{color:var(--gold);font-weight:700;}
+
+.feedback-card{
+  border-radius:10px;padding:14px;margin-bottom:12px;border:1px solid var(--line);background:var(--panel);
+  display:none;
+}
+.feedback-card.show{display:block;}
+.grade-row{display:flex;align-items:center;gap:10px;margin-bottom:6px;}
+.grade-pill{font-size:12px;font-weight:800;letter-spacing:.5px;padding:4px 10px;border-radius:20px;color:#0b0f13;}
+.grade-move{font-family:'Courier New',monospace;font-size:15px;color:var(--text);}
+.feedback-text{font-size:13.5px;color:var(--dim);line-height:1.5;}
+
+.history{font-family:'Courier New',monospace;font-size:11.5px;color:var(--dim);line-height:1.8;margin-bottom:12px;}
+.history b{color:var(--text);}
+.controls{display:flex;gap:8px;}
+.controls .btn{flex:1;background:transparent;border:1px solid var(--line);color:var(--dim);padding:9px;border-radius:7px;font-size:12px;cursor:pointer;}
+.controls .btn:hover{color:var(--gold);border-color:var(--gold-dim);}
+
+.result-card{
+  display:none;text-align:center;background:var(--panel);border:1px solid var(--gold-dim);
+  border-radius:10px;padding:18px;margin-bottom:12px;
+}
+.result-card.show{display:block;}
+.result-card h2{margin:0 0 6px;font-size:19px;color:var(--gold);}
+.result-card .delta{font-size:26px;font-weight:800;margin:8px 0;}
+.result-card .delta.up{color:var(--best);}
+.result-card .delta.down{color:var(--blunder);}
+
+/* --- Progress view --- */
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;}
+.stat-box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;}
+.stat-box .n{font-size:24px;font-weight:800;color:var(--gold);}
+.stat-box .l{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-top:2px;}
+
+.section-title{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--gold);margin:18px 0 8px;}
+.ledger{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;}
+.ledger-row{display:flex;justify-content:space-between;padding:11px 14px;border-bottom:1px solid var(--line);font-size:13px;}
+.ledger-row:last-child{border-bottom:none;}
+.ledger-row .tag{color:var(--text);}
+.ledger-row .count{color:var(--gold);font-weight:700;}
+.empty-note{color:var(--dim);font-size:13px;text-align:center;padding:20px;}
+
+.opening-item{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:13px;margin-bottom:8px;}
+.opening-item .oh{font-family:'Courier New',monospace;font-size:12.5px;color:var(--gold);margin-bottom:4px;}
+.opening-item .ot{font-size:13px;color:var(--dim);line-height:1.5;}
+
+/* --- Drills view --- */
+.drill-card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px;}
+.drill-tag{display:inline-block;background:#2a2210;color:var(--gold);font-size:10.5px;letter-spacing:1px;text-transform:uppercase;padding:3px 9px;border-radius:20px;margin-bottom:10px;}
+.drill-prompt{font-size:14px;color:var(--text);margin-bottom:10px;}
+.due-banner{
+  background:#2a2210;border:1px solid var(--gold-dim);color:var(--gold);
+  border-radius:10px;padding:11px 14px;margin-bottom:12px;font-size:13px;text-align:center;
+}
+.due-banner.none{background:var(--panel);border-color:var(--line);color:var(--dim);}
+.review-panel{display:none;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:12px;}
+.eval-graph{width:100%;height:60px;display:block;border-radius:6px;background:var(--panel2);cursor:pointer;}
+.graph-legend{font-size:10.5px;color:var(--dim);text-align:center;margin:6px 0 12px;}
+.review-head{display:flex;align-items:center;gap:9px;margin:10px 0 6px;font-size:13.5px;color:var(--text);flex-wrap:wrap;}
+.review-controls{display:flex;align-items:center;gap:8px;margin-top:12px;}
+.review-controls .btn{flex:1;background:transparent;border:1px solid var(--line);color:var(--dim);padding:9px;border-radius:7px;font-size:12px;cursor:pointer;}
+.review-counter{font-size:12px;color:var(--dim);min-width:56px;text-align:center;}
+.recycled-badge{display:inline-block;background:#33241a;color:#e0a878;border:1px solid #7a4a2a;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:3px 9px;border-radius:20px;margin-left:6px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Chess Coach</div>
+    <h1>Second Board</h1>
+    <div class="rating-strip">
+      <div>Your rating<b id="ratingDisplay">Unrated</b></div>
+      <div>Games played<b id="gamesDisplay">0</b></div>
+    </div>
+    <div class="toggle-row">
+      <button class="toggle on" id="toggleSound">Sound on</button>
+      <button class="toggle on" id="toggleHaptics">Haptics on</button>
+      <span class="toggle" id="engineStatus" style="cursor:default;">Engine loading…</span>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="active" data-tab="play">Play</button>
+    <button data-tab="progress">Progress</button>
+    <button data-tab="drills">Drills</button>
+  </nav>
+
+  <!-- PLAY VIEW -->
+  <div class="view active" id="view-play">
+    <div class="setup-card" id="setupCard">
+      <div id="diagBadge"></div>
+      <p id="setupText">Loading your profile…</p>
+      <div class="color-pick" id="colorPick">
+        <button data-color="w" class="sel">Play White</button>
+        <button data-color="b">Play Black</button>
+      </div>
+      <button class="big-btn" id="startBtn">Start game</button>
+    </div>
+
+    <div id="gameArea" style="display:none;">
+      <div class="board-frame"><div class="board" id="board"></div></div>
+      <div class="status-row">
+        <span class="turn" id="turnIndicator">—</span>
+        <span id="oppRatingLabel"></span>
+      </div>
+
+      <div class="feedback-card" id="feedbackCard">
+        <div class="grade-row">
+          <span class="grade-pill" id="gradePill">—</span>
+          <span class="grade-move" id="gradeMove"></span>
+        </div>
+        <div class="feedback-text" id="gradeText"></div>
+      </div>
+
+      <div class="result-card" id="resultCard">
+        <h2 id="resultTitle"></h2>
+        <div class="delta" id="resultDelta"></div>
+        <div class="feedback-text" id="resultNote"></div>
+        <button class="big-btn" id="btnReview" style="margin-top:12px;">Review this game</button>
+        <div class="feedback-text" id="recycleNote" style="margin-top:10px;"></div>
+      </div>
+
+      <div class="review-panel" id="reviewPanel">
+        <div class="section-title" style="margin-top:0;">Game review</div>
+        <canvas id="evalGraph" class="eval-graph"></canvas>
+        <div class="graph-legend">Tap the graph to jump · gold above the line means you were better</div>
+        <div class="board-frame"><div class="board" id="reviewBoard"></div></div>
+        <div class="review-head">
+          <span class="grade-pill" id="reviewGrade">—</span>
+          <span id="reviewMoveLabel"></span>
+        </div>
+        <div class="feedback-text" id="reviewNote"></div>
+        <div class="review-controls">
+          <button class="btn" id="reviewPrev">‹ Prev</button>
+          <span class="review-counter" id="reviewCounter">—</span>
+          <button class="btn" id="reviewNext">Next ›</button>
+        </div>
+        <button class="btn" id="reviewJumpError" style="width:100%;margin-top:8px;">Jump to next mistake</button>
+      </div>
+
+      <div class="history" id="historyLine"></div>
+      <div class="controls">
+        <button class="btn" id="btnUndo">Undo</button>
+        <button class="btn" id="btnResign">Resign</button>
+        <button class="btn" id="btnNew">New game</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PROGRESS VIEW -->
+  <div class="view" id="view-progress">
+    <div class="stat-grid">
+      <div class="stat-box"><div class="n" id="pStatRating">—</div><div class="l">Current rating</div></div>
+      <div class="stat-box"><div class="n" id="pStatGames">0</div><div class="l">Games played</div></div>
+      <div class="stat-box"><div class="n" id="pStatWinPct">—</div><div class="l">Win rate</div></div>
+      <div class="stat-box"><div class="n" id="pStatAvgLoss">—</div><div class="l">Avg. centipawn loss</div></div>
+    </div>
+
+    <div class="section-title">Recurring mistakes</div>
+    <div class="ledger" id="mistakeLedger"><div class="empty-note">Play a few games and patterns will show up here.</div></div>
+
+    <div class="section-title">Opening mistakes</div>
+    <div id="openingLedger"><div class="empty-note">No opening deviations logged yet.</div></div>
+
+    <div class="section-title">Rating history</div>
+    <div class="ledger" id="ratingLedger"><div class="empty-note">No games completed yet.</div></div>
+  </div>
+
+  <!-- DRILLS VIEW -->
+  <div class="view" id="view-drills">
+    <div class="due-banner" id="dueBanner"></div>
+    <div class="drill-card" id="drillCard">
+      <div class="drill-tag" id="drillTag">Loading</div>
+      <div class="drill-prompt" id="drillPrompt">Building a drill based on your recent mistakes…</div>
+      <div class="board-frame"><div class="board" id="drillBoard"></div></div>
+      <div class="feedback-text" id="drillFeedback" style="margin-top:10px;"></div>
+    </div>
+    <button class="big-btn secondary" id="btnNextDrill">Next drill</button>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   PROFILE / PERSISTENCE
+   ============================================================ */
+const DEFAULT_PROFILE = {
+  rating: null,          // null until diagnostic complete
+  diagnosticDone: false,
+  gamesPlayed: 0,
+  wins:0, losses:0, draws:0,
+  currentStreak: 0,     // positive = win streak, negative = loss streak
+  ratingGap: 25,         // dynamic target-opponent offset, adjusts with streaks
+  ratingHistory: [],     // [{rating, delta, opponent, result, date}]
+  mistakeTags: {},        // {tag: count}
+  openingMistakes: [],    // [{line, played, note}]
+  totalCpLoss: 0,
+  totalMovesGraded: 0,
+  savedMistakes: [],     // [{fen, played, best, explain, tag, box, dueAt, createdAt, timesSeen, timesCorrect}]
+  gameLog: []            // [{date, result, opponent, playerColor, moves:[{san,grade,loss,fen,best}]}]
+};
+let profile = JSON.parse(JSON.stringify(DEFAULT_PROFILE));
+
+let storageWorking = true;
+let storageMode = 'none';   // 'artifact' | 'local' | 'none'
+const STORE_KEY = 'coach_profile';
+
+// Detect which storage backend is actually available.
+// window.storage exists only inside Claude artifacts.
+// localStorage works when self-hosted (Netlify, your own domain, etc.)
+function detectStorage(){
+  try{
+    if(typeof localStorage !== 'undefined'){
+      const probe = '__probe__' + Date.now();
+      localStorage.setItem(probe, '1');
+      localStorage.removeItem(probe);
+      storageMode = 'local';
+      return;
+    }
+  }catch(e){ /* blocked — fall through */ }
+
+  if(typeof window !== 'undefined' && window.storage && typeof window.storage.set === 'function'){
+    storageMode = 'artifact';
+    return;
+  }
+  storageMode = 'none';
+}
+
+function coerceStored(raw){
+  if(raw===null || raw===undefined) return null;
+  if(typeof raw === 'string'){
+    try{ return JSON.parse(raw); }catch(e){ return null; }
+  }
+  if(typeof raw === 'object') return raw;
+  return null;
+}
+
+async function loadProfile(){
+  detectStorage();
+  try{
+    if(storageMode === 'local'){
+      const raw = localStorage.getItem(STORE_KEY);
+      const val = coerceStored(raw);
+      if(val) profile = Object.assign(JSON.parse(JSON.stringify(DEFAULT_PROFILE)), val);
+    } else if(storageMode === 'artifact'){
+      const r = await window.storage.get(STORE_KEY, false);
+      const val = r ? coerceStored(r.value) : null;
+      if(val) profile = Object.assign(JSON.parse(JSON.stringify(DEFAULT_PROFILE)), val);
+    }
+  }catch(e){
+    // No saved profile yet, or read failed — start fresh.
+  }
+  if(storageMode === 'none'){
+    storageWorking = false;
+    showStorageNotice();
+  }
+  refreshHeader();
+  refreshSetupCard();
+  refreshProgress();
+}
+
+async function saveProfile(){
+  if(!storageWorking) return;
+  try{
+    if(storageMode === 'local'){
+      localStorage.setItem(STORE_KEY, JSON.stringify(profile));
+      return;
+    }
+    if(storageMode === 'artifact'){
+      await window.storage.set(STORE_KEY, JSON.stringify(profile), false);
+      return;
+    }
+    throw new Error('no storage backend');
+  }catch(e){
+    // localStorage can throw on quota — trim the heaviest history and retry once.
+    try{
+      if(storageMode === 'local'){
+        profile.gameLog = profile.gameLog.slice(-5);
+        profile.savedMistakes = profile.savedMistakes.slice(-40);
+        profile.ratingHistory = profile.ratingHistory.slice(-20);
+        localStorage.setItem(STORE_KEY, JSON.stringify(profile));
+        return;
+      }
+    }catch(e2){}
+    storageWorking = false;
+    showStorageNotice();
+  }
+}
+
+function refreshHeader(){
+  document.getElementById('ratingDisplay').textContent = profile.rating ? profile.rating : 'Unrated';
+  document.getElementById('gamesDisplay').textContent = profile.gamesPlayed;
+}
+
+/* ============================================================
+   TABS
+   ============================================================ */
+document.querySelectorAll('nav.tabs button').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('nav.tabs button').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    document.getElementById('view-'+btn.dataset.tab).classList.add('active');
+    if(btn.dataset.tab==='progress') refreshProgress();
+    if(btn.dataset.tab==='drills') loadDrill();
+  });
+});
+
+/* ============================================================
+   STOCKFISH (UCI) WRAPPER
+   ------------------------------------------------------------
+   Wraps the WASM engine in a promise-based queue. If the engine
+   fails to load for any reason, engineReady stays false and the
+   app transparently falls back to the built-in minimax.
+   ============================================================ */
+let sf = null;
+let engineReady = false;
+let sfQueue = [];
+let sfCurrent = null;
+let sfBuffer = {bestmove:null, cp:null, mate:null, depth:0};
+
+function sfSend(cmd){
+  if(!sf) return;
+  try{
+    if(typeof sf.postMessage === 'function') sf.postMessage(cmd);
+    else if(typeof sf === 'function') sf(cmd);
+  }catch(e){ console.warn('engine send failed', e); }
+}
+
+function initEngine(){
+  return new Promise((resolve)=>{
+    let settled = false;
+    const done = (ok)=>{ if(!settled){ settled=true; engineReady=ok; resolve(ok); } };
+
+    try{
+      if(typeof STOCKFISH === 'function'){
+        sf = STOCKFISH();
+      } else if(typeof Stockfish === 'function'){
+        sf = Stockfish();
+      } else {
+        return done(false);
+      }
+    }catch(e){ return done(false); }
+
+    const handler = (event)=>{
+      const line = (typeof event === 'string') ? event : (event && event.data);
+      if(typeof line !== 'string') return;
+      handleEngineLine(line, done);
+    };
+
+    if(sf.addEventListener) sf.addEventListener('message', handler);
+    else sf.onmessage = handler;
+
+    sfSend('uci');
+    // If the engine never answers, fall back rather than hanging forever.
+    setTimeout(()=>done(engineReady), 8000);
+  });
+}
+
+function handleEngineLine(line, done){
+  if(line.startsWith('uciok')){
+    sfSend('setoption name Threads value 1');
+    sfSend('isready');
+    return;
+  }
+  if(line.startsWith('readyok')){
+    if(done) done(true);
+    processQueue();
+    return;
+  }
+  if(line.startsWith('info')){
+    // Track the deepest score seen for this search
+    const dMatch = line.match(/ depth (\d+)/);
+    const cpMatch = line.match(/score cp (-?\d+)/);
+    const mateMatch = line.match(/score mate (-?\d+)/);
+    const d = dMatch ? parseInt(dMatch[1],10) : 0;
+    if(d >= sfBuffer.depth){
+      sfBuffer.depth = d;
+      if(cpMatch){ sfBuffer.cp = parseInt(cpMatch[1],10); sfBuffer.mate = null; }
+      if(mateMatch){ sfBuffer.mate = parseInt(mateMatch[1],10); sfBuffer.cp = null; }
+    }
+    return;
+  }
+  if(line.startsWith('bestmove')){
+    const parts = line.split(/\s+/);
+    sfBuffer.bestmove = parts[1] && parts[1] !== '(none)' ? parts[1] : null;
+    if(sfCurrent){
+      sfCurrent.resolve({
+        bestmove: sfBuffer.bestmove,
+        cp: sfBuffer.cp,
+        mate: sfBuffer.mate
+      });
+      sfCurrent = null;
+    }
+    processQueue();
+    return;
+  }
+}
+
+function processQueue(){
+  if(sfCurrent || sfQueue.length===0 || !sf) return;
+  sfCurrent = sfQueue.shift();
+  sfBuffer = {bestmove:null, cp:null, mate:null, depth:0};
+  sfSend('position fen ' + sfCurrent.fen);
+  if(sfCurrent.uciElo !== null && sfCurrent.uciElo !== undefined){
+    sfSend('setoption name UCI_LimitStrength value true');
+    sfSend('setoption name UCI_Elo value ' + sfCurrent.uciElo);
+    sfSend('setoption name Skill Level value 20');
+  } else {
+    // Full-strength grading pass: no limiter, no artificial weakening.
+    sfSend('setoption name UCI_LimitStrength value false');
+    sfSend('setoption name Skill Level value 20');
+  }
+  sfSend('go depth ' + sfCurrent.depth);
+}
+
+// Analyze a position. Returns {bestmove(uci), cp, mate} with score
+// ALWAYS from the perspective of the side to move in that FEN.
+// Pass uciElo to weaken the engine toward a target Elo (opponent moves).
+// Omit it entirely for full-strength grading analysis.
+// Times out after 6s so a stuck/misbehaving engine can never hang the app —
+// this is what silently broke the bot's turn with no fallback triggering.
+function sfAnalyze(fen, depth, uciElo){
+  if(!engineReady) return Promise.resolve(null);
+  return new Promise((resolve)=>{
+    let settled = false;
+    const done = (val)=>{
+      if(settled) return;
+      settled = true;
+      resolve(val);
+    };
+    const timeoutId = setTimeout(()=>{
+      // Engine never answered — drop it from the queue if it's still pending/current
+      // so it doesn't block everything that comes after it, and fail soft.
+      sfQueue = sfQueue.filter(q => q.resolve !== wrappedResolve);
+      if(sfCurrent && sfCurrent.resolve === wrappedResolve){
+        sfCurrent = null;
+        processQueue();
+      }
+      console.warn('Engine analysis timed out — falling back.');
+      done(null);
+    }, 6000);
+    const wrappedResolve = (val)=>{
+      clearTimeout(timeoutId);
+      done(val);
+    };
+    sfQueue.push({fen, depth, uciElo:(uciElo===undefined?null:uciElo), resolve:wrappedResolve});
+    processQueue();
+  });
+}
+
+// Convert a UCI move string (e2e4, e7e8q) into a SAN move on a given FEN
+function uciToMove(fen, uci){
+  if(!uci) return null;
+  const g = new Chess(fen);
+  const from = uci.slice(0,2), to = uci.slice(2,4);
+  const promo = uci.length>4 ? uci[4] : undefined;
+  const mv = g.move({from, to, promotion: promo || 'q'});
+  return mv;
+}
+
+// Normalize an engine score to pawns, from the perspective of the side to move.
+function scoreToPawns(res){
+  if(!res) return null;
+  if(res.mate !== null && res.mate !== undefined){
+    return res.mate > 0 ? 100 : -100;   // treat mate as overwhelming
+  }
+  if(res.cp !== null && res.cp !== undefined) return res.cp/100;
+  return null;
+}
+
+/* ============================================================
+   CHESS ENGINE HELPERS
+   ============================================================ */
+const VALUES = {p:1,n:3,b:3,r:5,q:9,k:0};
+const PIECE_GLYPH = { p:'\u265F', r:'\u265C', n:'\u265E', b:'\u265D', q:'\u265B', k:'\u265A' };
+const files = ['a','b','c','d','e','f','g','h'];
+
+const MATE_SCORE = 10000;
+
+function evaluate(g){
+  // Terminal positions dominate any material count.
+  if(g.in_checkmate()){
+    // Side to move is checkmated, so the OTHER side won.
+    return g.turn()==='w' ? -MATE_SCORE : MATE_SCORE;
+  }
+  if(g.in_stalemate() || g.in_draw() || g.in_threefold_repetition() || g.insufficient_material()){
+    return 0;
+  }
+  let score = 0;
+  const b = g.board();
+  for(let r=0;r<8;r++) for(let f=0;f<8;f++){
+    const pc = b[r][f];
+    if(pc){
+      const v = VALUES[pc.type];
+      score += pc.color==='w' ? v : -v;
+    }
+  }
+  // small castling bonus
+  const hist = g.history();
+  if(hist.includes('O-O') || hist.includes('O-O-O')){
+    // can't tell which color easily post-hoc cheaply; skip fine-grained, use small flat nudge
+  }
+  return score;
+}
+
+function minimax(g, depth, alpha, beta, maximizing){
+  if(depth===0 || g.game_over()) return evaluate(g);
+  const moves = g.moves();
+  if(maximizing){
+    let maxEval = -Infinity;
+    for(const m of moves){
+      g.move(m);
+      const ev = minimax(g, depth-1, alpha, beta, false);
+      g.undo();
+      maxEval = Math.max(maxEval, ev);
+      alpha = Math.max(alpha, ev);
+      if(beta<=alpha) break;
+    }
+    return maxEval;
+  } else {
+    let minEval = Infinity;
+    for(const m of moves){
+      g.move(m);
+      const ev = minimax(g, depth-1, alpha, beta, true);
+      g.undo();
+      minEval = Math.min(minEval, ev);
+      beta = Math.min(beta, ev);
+      if(beta<=alpha) break;
+    }
+    return minEval;
+  }
+}
+
+// Returns ranked list of {move, score} for every legal move at current position, from white's-perspective score
+function searchRoot(g, depth){
+  const moves = g.moves({verbose:true});
+  const ranked = [];
+  for(const m of moves){
+    g.move(m.san);
+    const score = minimax(g, depth-1, -Infinity, Infinity, g.turn()==='w');
+    g.undo();
+    ranked.push({san:m.san, from:m.from, to:m.to, flags:m.flags, captured:m.captured, score});
+  }
+  ranked.sort((a,b)=> g.turn()==='w' ? b.score-a.score : a.score-b.score);
+  return ranked;
+}
+
+/* ============================================================
+   ELO -> ENGINE STRENGTH MAPPING
+   ============================================================ */
+// Stockfish's own UCI_Elo strength limiter targets a real Elo directly,
+// rather than us guessing at a Skill Level -> Elo mapping.
+// UCI_Elo is honored roughly in the 1320-3190 range; below that we still
+// enable UCua_LimitStrength but also drop Skill Level and depth hard,
+// since UCI_Elo itself won't go low enough for true beginners.
+function engineParamsForElo(elo){
+  const clampedElo = Math.max(1320, Math.min(3190, Math.round(elo)));
+  const depth = Math.max(4, Math.min(16, Math.round(4 + (elo-700)/140)));
+  // legacy fallback params for the built-in minimax
+  const fbDepth = Math.max(1, Math.min(3, 1 + Math.floor((elo-700)/450)));
+  const blunderChance = Math.max(0.03, Math.min(0.45, 0.42 - (elo-600)/2600));
+  return {uciElo: clampedElo, depth, fbDepth, blunderChance};
+}
+
+function pickEngineMove(g, elo){
+  // IMPORTANT: use fbDepth here, not depth. `depth` is sized for Stockfish
+  // (4-16 plies with proper pruning); this fallback is a brute-force minimax
+  // with no move ordering, so anything past ~3 plies never finishes on a phone.
+  // This mismatch is what caused the bot to hang silently in "Basic engine" mode.
+  const {fbDepth, blunderChance} = engineParamsForElo(elo);
+  // Hard clamp as a second line of defense — this fallback minimax must never
+  // run past depth 3 or it can hang the tab regardless of what's passed in.
+  const safeDepth = Math.max(1, Math.min(3, fbDepth));
+  const ranked = searchRoot(g, safeDepth);
+  if(ranked.length===0) return null;
+  if(Math.random() < blunderChance && ranked.length>1){
+    // pick a suboptimal move to simulate a weaker player, biased toward the worse half
+    const idx = Math.min(ranked.length-1, Math.floor(Math.random()*ranked.length*0.7)+1);
+    return ranked[idx];
+  }
+  return ranked[0];
+}
+
+/* ============================================================
+   MOVE GRADING
+   ============================================================ */
+const GRADE_META = {
+  brilliant: {label:'Brilliant', color:'var(--brilliant)'},
+  best:      {label:'Best move', color:'var(--best)'},
+  great:     {label:'Great', color:'var(--great)'},
+  good:      {label:'Good', color:'var(--good)'},
+  inaccuracy:{label:'Inaccuracy', color:'var(--inacc)'},
+  mistake:   {label:'Mistake', color:'var(--mistake)'},
+  blunder:   {label:'Blunder', color:'var(--blunder)'}
+};
+
+// Grading thresholds scale with the player's rating: the same 100-centipawn
+// slip is a minor inaccuracy for a beginner and a real mistake for a 1900.
+// ratingFactor > 1 tightens thresholds (stronger players held to a stricter bar);
+// ratingFactor < 1 loosens them (beginners aren't blundered for normal noise).
+function thresholdFactorForRating(rating){
+  if(!rating) return 1;                 // no rating yet (diagnostic game) -> neutral
+  const r = Math.max(600, Math.min(2400, rating));
+  // 1000 rating -> factor ~0.6 (looser), 1800 -> factor 1.0, 2400 -> factor ~1.35
+  return Math.max(0.55, Math.min(1.4, 0.6 + (r-1000)/1400*0.8));
+}
+
+// loss is in pawns, from the mover's perspective (positive = worse for mover)
+function classify(loss, wasTop, sacrificed, deliversMate, ratingFactor){
+  const f = (ratingFactor===undefined || ratingFactor===null) ? 1 : ratingFactor;
+  if(deliversMate) return 'brilliant';
+  if(wasTop && sacrificed && loss<=0.2*f) return 'brilliant';
+  if(loss<=0.05*f) return 'best';
+  if(loss<=0.15*f) return 'great';
+  if(loss<=0.35*f) return 'good';
+  if(loss<=0.75*f) return 'inaccuracy';
+  if(loss<=1.75*f) return 'mistake';
+  return 'blunder';
+}
+
+function tagMistake(g, moverColor, opponentBestReply){
+  if(opponentBestReply && opponentBestReply.captured){
+    const v = VALUES[opponentBestReply.captured];
+    if(v>=3) return 'Hanging a piece';
+    return 'Dropped a pawn';
+  }
+  if(opponentBestReply && /\+/.test(opponentBestReply.san)) return 'King safety lapse';
+  return 'Positional inaccuracy';
+}
+
+/* ============================================================
+   OPENING BOOK (compact, common lines)
+   ============================================================ */
+const OPENING_BOOK = {
+  "": [{san:"e4", note:"1.e4 is the most direct central try, opening lines for both bishops and the queen."},{san:"d4", note:"1.d4 claims the center and keeps options for a range of structures."}],
+  "e4": [{san:"e5", note:"Classical reply, meeting the center head-on."},{san:"c5", note:"The Sicilian — a sharp, asymmetrical fight for the center."},{san:"e6", note:"The French — solid, aiming to challenge e4 with ...d5."},{san:"c6", note:"The Caro-Kann — solid, prepares ...d5 without blocking the c8 bishop."}],
+  "e4 e5": [{san:"Nf3", note:"Attacks e5 immediately and develops toward castling."}],
+  "e4 e5 Nf3": [{san:"Nc6", note:"Defends e5 and develops naturally."}],
+  "e4 e5 Nf3 Nc6": [{san:"Bb5", note:"The Ruy Lopez — pressures the knight defending e5."},{san:"Bc4", note:"The Italian Game — aims straight at f7."}],
+  "e4 c5": [{san:"Nf3", note:"Keeps flexible, heading toward an Open Sicilian with d4 next."}],
+  "e4 c5 Nf3": [{san:"d6", note:"Prepares ...Nf6 without allowing e5 tricks."},{san:"Nc6", note:"Develops naturally, keeping options open."}],
+  "e4 e6": [{san:"d4", note:"Takes the full center; Black will challenge it with ...d5."}],
+  "e4 e6 d4": [{san:"d5", note:"The core French idea — strike the center from the side."}],
+  "e4 c6": [{san:"d4", note:"Takes the center; Black follows with ...d5."}],
+  "e4 c6 d4": [{san:"d5", note:"Challenges the center immediately, the point of the Caro-Kann."}],
+  "d4": [{san:"d5", note:"Symmetrical center fight."},{san:"Nf6", note:"Flexible, delays committing the center pawn."}],
+  "d4 d5": [{san:"c4", note:"The Queen's Gambit — offers a pawn to open lines and gain central space."}],
+  "d4 d5 c4": [{san:"e6", note:"Queen's Gambit Declined — solid, supports d5."},{san:"c6", note:"The Slav — supports d5 while keeping the light bishop free."}],
+  "d4 Nf6": [{san:"c4", note:"Expands in the center; Black will choose an Indian setup."}],
+  "d4 Nf6 c4": [{san:"g6", note:"King's Indian setup — fianchetto and strike back later with ...e5 or ...c5."},{san:"e6", note:"Nimzo/Queen's Indian territory — flexible and solid."}]
+};
+
+function bookKeyFor(historySAN){
+  return historySAN.join(' ');
+}
+
+/* ============================================================
+   DRILL BANK
+   ============================================================ */
+const DRILL_BANK = [
+  {tag:'Hanging a piece', fen:'r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5Q2/PPPP1PPP/RNB1K1NR b KQkq - 4 3', solution:'Nd4', explain:"Black's knight can jump to d4, forking White's queen on f3 and the bishop's diagonal — a move that punishes early queen development."},
+  {tag:'Hanging a piece', fen:'rnbqkbnr/ppp2ppp/8/3pp3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 3', solution:'exd5', explain:"White simply captures the undefended pawn on d5 — always scan for free material before making a developing move."},
+  {tag:'Missed material win', fen:'r1bqk2r/pppp1ppp/2n2n2/2b1p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R w KQkq - 6 5', solution:'Bxf7+', explain:"The bishop takes on f7 with check — a classic Italian Game shot that wins a pawn and drags the king out."},
+  {tag:'King safety lapse', fen:'rnbqk2r/ppppbppp/5n2/4p3/4P3/3P1N2/PPP2PPP/RNBQKB1R w KQkq - 4 4', solution:'O-O', explain:"Castling now secures the king before opening the center — delaying it invites tactics down the e- and f-files."},
+  {tag:'King safety lapse', fen:'r1bqk1nr/pppp1ppp/2n5/2b1p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 4 4', solution:'Nf6', explain:"Developing toward castling is more urgent than grabbing material or pushing pawns — get the king safe first."},
+  {tag:'Positional inaccuracy', fen:'r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/2N2N2/PPPP1PPP/R1BQK2R b KQkq - 6 4', solution:'Bc5', explain:"Developing the bishop actively to c5 fights for the center and prepares castling, rather than a passive setup."},
+  {tag:'Opening deviation', fen:'rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2', solution:'Nf3', explain:"Attacking e5 immediately is more testing than a slower move — a common early-opening habit to build."},
+  {tag:'Opening deviation', fen:'rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR w KQkq - 0 2', solution:'c4', explain:"The Queen's Gambit fights for the center with tempo — offering the c-pawn to open lines rather than developing slowly."},
+  {tag:'Missed material win', fen:'r3k2r/ppp2ppp/2n5/3qp3/1b2P3/2N2N2/PPP2PPP/R1BQR1K1 w kq - 0 10', solution:'Nd5', explain:"The knight jumps into d5, forking the queen and attacking the bishop — always check for forks when pieces line up."},
+  {tag:'Hanging a piece', fen:'r1bqkb1r/ppp2ppp/2n2n2/3pp3/4P3/2N2N2/PPPP1PPP/R1BQKB1R w KQkq - 0 5', solution:'Nxd5', explain:"The pawn on d5 is undefended after the knight trade sequence — simple captures are often the best move."},
+  {tag:'Positional inaccuracy', fen:'rnbqk2r/ppp1bppp/4pn2/3p4/2PP4/5N2/PP2PPPP/RNBQKB1R w KQkq - 4 5', solution:'Nc3', explain:"Developing the last minor piece toward the center keeps pace with Black's setup rather than pushing another pawn."},
+  {tag:'King safety lapse', fen:'rnbq1rk1/ppppbppp/5n2/4p3/4P3/3P1N2/PPP1BPPP/RNBQK2R w KQ - 6 5', solution:'O-O', explain:"With development mostly complete, castling now is safer than any further pawn push."}
+];
+
+/* ============================================================
+   GAME STATE
+   ============================================================ */
+let game = new Chess();
+let playerColor = 'w';
+let selected = null;
+let lastMove = null;
+let boardLocked = false;
+let sessionCpLossTotal = 0;
+let sessionMoves = [];
+let sessionMovesGraded = 0;
+let gameOpponentElo = null; // elo used for THIS game
+let diagnosticMode = false;
+
+function renderBoardTo(elId, g, interactive){
+  const el = document.getElementById(elId);
+  el.innerHTML='';
+  const boardState = g.board();
+  for(let r=0;r<8;r++){
+    for(let f=0;f<8;f++){
+      const sq = files[f] + (8-r);
+      const div = document.createElement('div');
+      div.className = 'sq ' + (((r+f)%2===0)?'light':'dark');
+      div.dataset.sq = sq;
+      const piece = boardState[r][f];
+      if(piece){
+        const span = document.createElement('span');
+        span.className = 'piece ' + (piece.color==='w'?'piece-white':'piece-black');
+        span.textContent = PIECE_GLYPH[piece.type];
+        div.appendChild(span);
+      }
+      if(interactive){
+        if(selected===sq) div.classList.add('selected');
+        if(lastMove && (lastMove.from===sq||lastMove.to===sq)) div.classList.add('lastmove');
+        div.addEventListener('click', onSquareClick);
+      }
+      el.appendChild(div);
+    }
+  }
+  if(interactive && selected){
+    const moves = g.moves({square:selected, verbose:true});
+    moves.forEach(m=>{
+      const e2 = el.querySelector(`[data-sq="${m.to}"]`);
+      if(e2){ e2.classList.add('legal'); if(g.get(m.to)) e2.classList.add('has-piece'); }
+    });
+  }
+}
+
+function render(){
+  renderBoardTo('board', game, true);
+  const turnText = boardLocked && !game.game_over()
+    ? "Analyzing…"
+    : (game.turn()===playerColor ? "Your move" : "Opponent thinking…");
+  document.getElementById('turnIndicator').textContent = game.game_over() ? 'Game over' : turnText;
+  document.getElementById('historyLine').innerHTML = formatHistory();
+}
+
+function formatHistory(){
+  const hist = game.history();
+  let out='';
+  for(let i=0;i<hist.length;i+=2){
+    out += `<b>${i/2+1}.</b> ${hist[i]||''} ${hist[i+1]||''}&nbsp; &nbsp;`;
+  }
+  return out.trim();
+}
+
+function onSquareClick(e){
+  if(boardLocked || game.game_over()) return;
+  if(game.turn()!==playerColor) return;
+  const sq = e.currentTarget.dataset.sq;
+  const piece = game.get(sq);
+  if(selected){
+    if(sq===selected){ selected=null; render(); return; }
+    const legal = game.moves({square:selected, verbose:true}).some(m=>m.to===sq);
+    if(legal){
+      makePlayerMove(selected, sq);
+    } else if(piece && piece.color===playerColor){
+      selected=sq; render();
+    } else { selected=null; render(); }
+  } else if(piece && piece.color===playerColor){
+    selected=sq; render();
+  }
+}
+
+const GRADE_DEPTH = 12;   // analysis depth for grading YOUR moves (always full strength)
+
+async function makePlayerMove(from, to){
+  boardLocked = true;
+  try{
+  const preMoveFEN = game.fen();
+
+  // Ask the engine for the best move + eval BEFORE you move.
+  let bestSan = null, evalBefore = null;
+  if(engineReady){
+    const before = await sfAnalyze(preMoveFEN, GRADE_DEPTH); // full strength, no elo limiter
+    evalBefore = scoreToPawns(before);          // from YOUR perspective (you're to move)
+    if(before && before.bestmove){
+      const t = uciToMove(preMoveFEN, before.bestmove);
+      if(t) bestSan = t.san;
+    }
+  }
+
+  const mv = game.move({from, to, promotion:'q'});
+  if(!mv){ boardLocked=false; return; }
+  selected = null;
+  lastMove = {from:mv.from, to:mv.to};
+  playMoveSound(!!mv.captured);
+  render();
+
+  // Eval AFTER your move (opponent to move, so negate to get your perspective).
+  let evalAfter = null;
+  if(engineReady && !game.game_over()){
+    const after = await sfAnalyze(game.fen(), GRADE_DEPTH); // full strength, no elo limiter
+    const oppPov = scoreToPawns(after);
+    if(oppPov !== null) evalAfter = -oppPov;
+  }
+
+  let loss = 0;
+  if(evalBefore !== null && evalAfter !== null){
+    loss = evalBefore - evalAfter;
+  } else {
+    // Fallback: old minimax comparison
+    const gTemp = new Chess(preMoveFEN);
+    const ranked = searchRoot(gTemp, 3);
+    const best = ranked[0];
+    const played = ranked.find(r=>r.san===mv.san);
+    if(best && played){
+      loss = playerColor==='w' ? (best.score-played.score) : (played.score-best.score);
+      bestSan = bestSan || best.san;
+    }
+  }
+  loss = Math.max(0, Math.min(20, loss));
+
+  const deliversMate = mv.san.includes('#');
+  const wasTop = bestSan && bestSan===mv.san;
+  const sacrificed = false;
+  const ratingFactor = thresholdFactorForRating(profile.rating);
+  const grade = deliversMate ? 'brilliant' : classify(loss, wasTop, sacrificed, deliversMate, ratingFactor);
+
+  const bestEntry = bestSan ? {san:bestSan} : null;
+  showFeedback(grade, mv.san, loss, null, bestEntry, preMoveFEN);
+
+  checkOpeningBook(mv, loss);
+
+  if((grade==='mistake' || grade==='blunder') && !deliversMate){
+    const oppBest = bestEntry || {san:bestSan};
+    const tag = tagMistake(game, playerColor, null);
+    profile.mistakeTags[tag] = (profile.mistakeTags[tag]||0)+1;
+    saveMistakeForRecycling(preMoveFEN, mv.san, bestSan, loss);
+  }
+
+  sessionCpLossTotal += loss;
+  sessionMovesGraded += 1;
+  sessionMoves.push({
+    san: mv.san, grade, loss,
+    fenBefore: preMoveFEN, fenAfter: game.fen(),
+    best: bestSan, by:'you',
+    evalAfter: (evalAfter !== null ? evalAfter : undefined)
+  });
+
+  render();
+  if(game.game_over()){ boardLocked=false; finishGame(); return; }
+  setTimeout(engineTurn, 350);
+  } catch(err){
+    // Never leave the board permanently locked from an unexpected error.
+    console.error('makePlayerMove failed, board unlocked', err);
+    boardLocked = false;
+  }
+}
+
+function checkOpeningBook(mv, loss){
+  const hist = game.history();
+  const plyIndex = hist.length; // after this move was pushed
+  if(plyIndex>8) return; // only check first 8 plies
+  const priorHistory = hist.slice(0, plyIndex-1);
+  const key = bookKeyFor(priorHistory);
+  const entry = OPENING_BOOK[key];
+  if(!entry) return;
+  const goodMoves = entry.map(e=>e.san);
+  if(!goodMoves.includes(mv.san) && loss>0.3){
+    const alt = entry[0];
+    profile.openingMistakes.push({
+      line: priorHistory.join(' ') || '(start)',
+      played: mv.san,
+      note: `A well-known continuation here is ${alt.san} — ${alt.note}`
+    });
+    if(profile.openingMistakes.length>40) profile.openingMistakes.shift();
+  }
+}
+
+function pieceName(t){
+  return {p:'pawn',n:'knight',b:'bishop',r:'rook',q:'queen',k:'king'}[t] || 'piece';
+}
+
+// What does the opponent threaten in the CURRENT position (after your move)?
+function findThreats(g){
+  const replies = g.moves({verbose:true});
+  let bestCapture = null;
+  let checkReply = null;
+  for(const r of replies){
+    if(r.captured){
+      // is the capturing square defended by us? crude: simulate capture, see if we can recapture
+      g.move(r.san);
+      const recaptures = g.moves({verbose:true}).filter(m=>m.to===r.to);
+      const bestRecapture = recaptures.length ? Math.max(...recaptures.map(m=>VALUES[g.get(m.to) ? g.get(m.to).type : 'p'])) : 0;
+      g.undo();
+      const gain = VALUES[r.captured] - (recaptures.length ? VALUES[r.piece] : 0);
+      if(!bestCapture || gain > bestCapture.gain){
+        bestCapture = {san:r.san, captured:r.captured, to:r.to, gain, defended:recaptures.length>0, piece:r.piece};
+      }
+    }
+    if(/\+/.test(r.san) && !checkReply) checkReply = r;
+  }
+  return {bestCapture, checkReply};
+}
+
+// Describe what a move accomplishes, in plain terms
+function describeMove(g, san){
+  const test = new Chess(g.fen());
+  const mv = test.move(san);
+  if(!mv) return '';
+  const parts = [];
+  if(mv.san.includes('#')) return 'it delivers checkmate';
+  if(mv.captured) parts.push(`it wins the ${pieceName(mv.captured)} on ${mv.to}`);
+  if(mv.san.includes('+')) parts.push('it comes with check, forcing a response');
+  if(mv.flags.includes('k') || mv.flags.includes('q')) parts.push('it castles, tucking the king to safety and connecting the rooks');
+
+  // does it create a threat?
+  const threats = findThreats(test);
+  if(threats.bestCapture && threats.bestCapture.gain>0 && !mv.captured){
+    parts.push(`it sets up a threat to win the ${pieceName(threats.bestCapture.captured)}`);
+  }
+  // central development
+  const centralSquares = ['d4','e4','d5','e5','c4','f4','c5','f5'];
+  if(!mv.captured && ['n','b'].includes(mv.piece) && parts.length===0){
+    parts.push(`it develops the ${pieceName(mv.piece)} toward the center`);
+  }
+  if(!mv.captured && mv.piece==='p' && centralSquares.includes(mv.to) && parts.length===0){
+    parts.push('it stakes out central space');
+  }
+  if(parts.length===0) parts.push('it improves the position without creating weaknesses');
+  return parts.slice(0,2).join(', and ');
+}
+
+// Explain WHY the played move lost value
+function explainLoss(preFEN, playedSan, bestSan, loss){
+  const before = new Chess(preFEN);
+  const after = new Chess(preFEN);
+  after.move(playedSan);
+
+  const threats = findThreats(after);
+  let why = '';
+
+  if(threats.bestCapture && threats.bestCapture.gain >= 1){
+    const c = threats.bestCapture;
+    if(!c.defended){
+      why = `It leaves your ${pieceName(c.captured)} on ${c.to} undefended — the opponent can simply play ${c.san} and take it for free.`;
+    } else {
+      why = `It allows ${c.san}, winning material on ${c.to} even after you recapture.`;
+    }
+  } else if(threats.checkReply){
+    why = `It exposes your king — the opponent has ${threats.checkReply.san}, and dealing with the check costs you time.`;
+  } else {
+    // did the played move miss an available capture?
+    const availableCaptures = before.moves({verbose:true}).filter(m=>m.captured);
+    const bestAvailable = availableCaptures.sort((a,b)=>VALUES[b.captured]-VALUES[a.captured])[0];
+    if(bestAvailable && VALUES[bestAvailable.captured]>=3 && bestAvailable.san!==playedSan){
+      why = `It passes up material that was on offer — the ${pieceName(bestAvailable.captured)} was available to take.`;
+    } else {
+      why = `It concedes ground positionally: the piece ends up less active, and the opponent gets a free hand to improve.`;
+    }
+  }
+
+  const bestWhy = bestSan ? ` Better was ${bestSan}, because ${describeMove(before, bestSan)}.` : '';
+  return why + bestWhy;
+}
+
+function showFeedback(grade, san, loss, playedEntry, bestEntry, preFEN){
+  const meta = GRADE_META[grade];
+  const card = document.getElementById('feedbackCard');
+  card.classList.add('show');
+  const pill = document.getElementById('gradePill');
+  pill.textContent = meta.label;
+  pill.style.background = meta.color;
+  document.getElementById('gradeMove').textContent = san;
+
+  const cp = Math.round(Math.max(0,loss)*100);
+  const bestSan = bestEntry ? bestEntry.san : null;
+  let text = '';
+
+  if(san.includes('#')){
+    text = 'Checkmate — the game is over and you have won. Nothing to improve here.';
+    document.getElementById('gradeText').textContent = text;
+    pill.textContent = 'Checkmate';
+    playGradeSound('brilliant'); hapticFor('brilliant');
+    return;
+  }
+  if(grade==='brilliant'){
+    text = `A strong, non-obvious choice — ${describeMove(new Chess(preFEN), san)}. It holds up even under the opponent's best reply.`;
+  } else if(grade==='best'){
+    text = `The top choice here: ${describeMove(new Chess(preFEN), san)}.`;
+  } else if(grade==='great' || grade==='good'){
+    let t = `A solid move — ${describeMove(new Chess(preFEN), san)}.`;
+    if(bestSan && bestSan!==san){
+      t += ` Marginally sharper was ${bestSan} (about ${cp} centipawns better), because ${describeMove(new Chess(preFEN), bestSan)}.`;
+    }
+    text = t;
+  } else {
+    const severity = grade==='inaccuracy' ? 'This slightly loosens your position' :
+                     grade==='mistake' ? 'This costs real material or safety' :
+                     'This is a serious error';
+    text = `${severity} — roughly ${cp} centipawns. ` + explainLoss(preFEN, san, bestSan, loss);
+  }
+  document.getElementById('gradeText').textContent = text;
+
+  playGradeSound(grade);
+  hapticFor(grade);
+}
+
+/* ============================================================
+   SOUND + HAPTICS
+   ============================================================ */
+let audioCtx = null;
+let soundOn = true;
+let hapticsOn = true;
+
+function ensureAudio(){
+  if(!audioCtx){
+    try{ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }
+    catch(e){ audioCtx = null; }
+  }
+  if(audioCtx && audioCtx.state==='suspended') audioCtx.resume();
+  return audioCtx;
+}
+
+function tone(freq, startOffset, duration, type, gainPeak){
+  const ctx = ensureAudio();
+  if(!ctx || !soundOn) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type || 'sine';
+  osc.frequency.setValueAtTime(freq, ctx.currentTime + startOffset);
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime + startOffset);
+  gain.gain.exponentialRampToValueAtTime(gainPeak||0.18, ctx.currentTime + startOffset + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + startOffset + duration);
+  osc.connect(gain); gain.connect(ctx.destination);
+  osc.start(ctx.currentTime + startOffset);
+  osc.stop(ctx.currentTime + startOffset + duration + 0.02);
+}
+
+function playMoveSound(isCapture){
+  if(isCapture){ tone(180, 0, 0.11, 'square', 0.14); tone(120, 0.02, 0.13, 'triangle', 0.10); }
+  else { tone(320, 0, 0.07, 'triangle', 0.10); }
+}
+
+function playGradeSound(grade){
+  switch(grade){
+    case 'brilliant': tone(660,0,0.12,'sine',0.16); tone(880,0.10,0.12,'sine',0.16); tone(1180,0.20,0.20,'sine',0.16); break;
+    case 'best':      tone(620,0,0.11,'sine',0.15); tone(880,0.09,0.16,'sine',0.15); break;
+    case 'great':     tone(560,0,0.10,'sine',0.13); tone(740,0.08,0.13,'sine',0.13); break;
+    case 'good':      tone(520,0,0.10,'sine',0.11); break;
+    case 'inaccuracy':tone(330,0,0.13,'triangle',0.12); break;
+    case 'mistake':   tone(250,0,0.16,'sawtooth',0.11); tone(210,0.12,0.16,'sawtooth',0.10); break;
+    case 'blunder':   tone(190,0,0.20,'sawtooth',0.13); tone(140,0.15,0.28,'sawtooth',0.12); break;
+  }
+}
+
+function playResultSound(result){
+  if(result===1){ tone(520,0,0.13,'sine',0.16); tone(660,0.12,0.13,'sine',0.16); tone(784,0.24,0.30,'sine',0.16); }
+  else if(result===0){ tone(300,0,0.20,'sawtooth',0.13); tone(220,0.18,0.34,'sawtooth',0.12); }
+  else { tone(420,0,0.16,'sine',0.13); tone(420,0.16,0.22,'sine',0.12); }
+}
+
+function buzz(pattern){
+  if(!hapticsOn) return;
+  try{ if(navigator.vibrate) navigator.vibrate(pattern); }catch(e){}
+}
+
+function hapticFor(grade){
+  switch(grade){
+    case 'brilliant': buzz([18,40,18,40,32]); break;
+    case 'best':      buzz([14,50,22]); break;
+    case 'great':     buzz([16]); break;
+    case 'good':      buzz([10]); break;
+    case 'inaccuracy':buzz([26]); break;
+    case 'mistake':   buzz([44,60,44]); break;
+    case 'blunder':   buzz([80,60,80,60,110]); break;
+  }
+}
+
+/* ============================================================
+   ENGINE TURN
+   ============================================================ */
+async function engineTurn(){
+  if(game.game_over()) { boardLocked=false; return; }
+  try{
+    const elo = diagnosticMode ? 1200 : gameOpponentElo;
+    const {uciElo, depth} = engineParamsForElo(elo);
+
+    const fenBeforeEngine = game.fen();
+    let san = null;
+
+    if(engineReady){
+      const res = await sfAnalyze(fenBeforeEngine, depth, uciElo);
+      if(res && res.bestmove){
+        const mvTest = uciToMove(fenBeforeEngine, res.bestmove);
+        if(mvTest) san = mvTest.san;
+      }
+    }
+    if(!san){
+      // Either Stockfish isn't ready, or it timed out / returned nothing usable.
+      const choice = pickEngineMove(game, elo);   // fallback minimax — always synchronous, never hangs
+      if(!choice){ boardLocked=false; return; }
+      san = choice.san;
+    }
+    await finishEngineMove(san, fenBeforeEngine);
+  } catch(err){
+    // Whatever went wrong, never leave the board permanently locked.
+    console.error('engineTurn failed, board unlocked', err);
+    boardLocked = false;
+  }
+}
+
+async function finishEngineMove(san, fenBeforeEngine){
+  const emv = game.move(san);
+  if(!emv){ boardLocked=false; return; }
+  lastMove = {from:emv.from, to:emv.to};
+  playMoveSound(!!emv.captured);
+  if(/\+|#/.test(emv.san)) buzz([30,40,30]);
+  sessionMoves.push({san:emv.san, grade:null, loss:0, fenBefore:fenBeforeEngine, fenAfter:game.fen(), best:null, by:'opponent'});
+  render();
+  boardLocked=false;
+  if(game.game_over()) finishGame();
+}
+
+/* ============================================================
+   GAME LIFECYCLE
+   ============================================================ */
+function refreshSetupCard(){
+  const badge = document.getElementById('diagBadge');
+  const text = document.getElementById('setupText');
+  if(!profile.diagnosticDone){
+    diagnosticMode = true;
+    badge.innerHTML = '<span class="diag-badge">Diagnostic game</span>';
+    text.textContent = "First, a calibration game against a moderate opponent (~1200) to find your current level. Play it out — resigning or reaching checkmate both work.";
+  } else {
+    diagnosticMode = false;
+    badge.innerHTML = '';
+    const gap = profile.ratingGap !== undefined ? profile.ratingGap : 25;
+    const target = profile.rating + gap;
+    const streakNote = profile.currentStreak>=2 ? " You're on a win streak, so the gap has widened to push you harder."
+      : profile.currentStreak<=-2 ? " You've dropped a couple in a row, so the gap has eased off."
+      : '';
+    text.textContent = `Your rating is ${profile.rating}. This game is set to ${target} — ${gap} points above you, to keep pushing you.${streakNote}`;
+  }
+}
+
+document.querySelectorAll('.color-pick button').forEach(b=>{
+  b.addEventListener('click', ()=>{
+    document.querySelectorAll('.color-pick button').forEach(x=>x.classList.remove('sel'));
+    b.classList.add('sel');
+    playerColor = b.dataset.color;
+  });
+});
+
+document.getElementById('startBtn').addEventListener('click', startGame);
+
+function startGame(){
+  game = new Chess();
+  selected=null; lastMove=null; boardLocked=false;
+  sessionCpLossTotal=0; sessionMovesGraded=0; sessionMoves=[];
+  document.getElementById('feedbackCard').classList.remove('show');
+  document.getElementById('resultCard').classList.remove('show');
+  document.getElementById('reviewPanel').style.display='none';
+  document.getElementById('setupCard').style.display='none';
+  document.getElementById('gameArea').style.display='block';
+
+  gameOpponentElo = diagnosticMode ? 1200 : (profile.rating + (profile.ratingGap !== undefined ? profile.ratingGap : 25));
+  document.getElementById('oppRatingLabel').textContent = diagnosticMode ? 'Calibration ~1200' : `Opponent ~${gameOpponentElo}`;
+
+  render();
+  if(playerColor==='b'){
+    boardLocked=true;
+    setTimeout(engineTurn, 500);
+  }
+}
+
+document.getElementById('btnUndo').addEventListener('click', ()=>{
+  if(boardLocked) return;
+  const hist = game.history();
+  if(hist.length===0) return;
+
+  // Undo normally removes a full round (your move + the opponent's reply).
+  // If there's only one ply on the board, remove just that one.
+  const pliesToRemove = hist.length >= 2 ? 2 : 1;
+
+  for(let i=0; i<pliesToRemove; i++){
+    if(game.history().length>0) game.undo();
+  }
+
+  // Keep the session move log in lockstep with the board — each undone ply
+  // has exactly one matching entry pushed by makePlayerMove/engineTurn.
+  // Popping without this left the log (and its stats) out of sync with what's
+  // actually on the board, which is what caused the corrupted-looking positions.
+  for(let i=0; i<pliesToRemove; i++){
+    const removed = sessionMoves.pop();
+    if(removed && removed.by==='you'){
+      sessionCpLossTotal = Math.max(0, sessionCpLossTotal - (removed.loss||0));
+      sessionMovesGraded = Math.max(0, sessionMovesGraded-1);
+    }
+  }
+
+  lastMove=null; selected=null;
+  document.getElementById('feedbackCard').classList.remove('show');
+  render();
+});
+document.getElementById('btnNew').addEventListener('click', ()=>{
+  document.getElementById('gameArea').style.display='none';
+  document.getElementById('setupCard').style.display='block';
+  refreshSetupCard();
+});
+document.getElementById('btnResign').addEventListener('click', ()=>{
+  finishGame(true);
+});
+
+function finishGame(resigned){
+  boardLocked = true;
+  let result; // 1 win, 0.5 draw, 0 loss (from player's perspective)
+  let title;
+  if(resigned){
+    result = 0; title = 'You resigned';
+  } else if(game.in_draw() || game.in_stalemate() || game.in_threefold_repetition()){
+    result = 0.5; title = 'Draw';
+  } else if(game.in_checkmate()){
+    const winner = game.turn()==='w' ? 'b' : 'w'; // side NOT to move just delivered mate
+    result = (winner===playerColor) ? 1 : 0;
+    title = (winner===playerColor) ? 'Checkmate — you win!' : 'Checkmate — opponent wins';
+  } else {
+    result = 0.5; title='Game ended';
+  }
+
+  const avgLoss = sessionMovesGraded>0 ? (sessionCpLossTotal/sessionMovesGraded) : 0.5;
+  profile.totalCpLoss += sessionCpLossTotal;
+  profile.totalMovesGraded += sessionMovesGraded;
+
+  if(!profile.diagnosticDone){
+    // Compute initial rating estimate from result + average centipawn loss quality
+    let base = 800;
+    const avgCp = avgLoss*100;
+    if(avgCp<20) base+=900;
+    else if(avgCp<40) base+=700;
+    else if(avgCp<70) base+=500;
+    else if(avgCp<120) base+=300;
+    else if(avgCp<200) base+=150;
+    if(result===1) base+=100;
+    else if(result===0) base-=150;
+    base = Math.max(400, Math.min(2200, Math.round(base/10)*10));
+    profile.rating = base;
+    profile.diagnosticDone = true;
+    profile.gamesPlayed += 1;
+    if(result===1) profile.wins++; else if(result===0.5) profile.draws++; else profile.losses++;
+    profile.ratingHistory.push({rating:base, delta:null, opponent:1200, result, date:new Date().toISOString()});
+
+    document.getElementById('resultTitle').textContent = title;
+    document.getElementById('resultDelta').textContent = base;
+    document.getElementById('resultDelta').className = 'delta up';
+    document.getElementById('resultNote').textContent = `Diagnostic complete — estimated starting rating: ${base}. Future games will target ${base+25}.`;
+  } else {
+    const oppElo = gameOpponentElo;
+    const expected = 1/(1+Math.pow(10, (oppElo-profile.rating)/400));
+    // Provisional K: early games move fast so a bad diagnostic doesn't stick;
+    // it settles toward a normal K=24 once you've played enough games to trust the number.
+    const gamesSoDiagnostic = profile.gamesPlayed; // games played AFTER diagnostic so far
+    const K = gamesSoDiagnostic < 5 ? 48 : gamesSoDiagnostic < 15 ? 32 : 24;
+    const newRating = Math.round(profile.rating + K*(result-expected));
+    const delta = newRating - profile.rating;
+    profile.rating = Math.max(300, newRating);
+    profile.gamesPlayed += 1;
+    if(result===1) profile.wins++; else if(result===0.5) profile.draws++; else profile.losses++;
+
+    // Update streak, then let the streak drive next game's rating gap.
+    if(result===1) profile.currentStreak = Math.max(1, profile.currentStreak+1);
+    else if(result===0) profile.currentStreak = Math.min(-1, profile.currentStreak-1);
+    else profile.currentStreak = 0;
+
+    let gap = profile.ratingGap !== undefined ? profile.ratingGap : 25;
+    if(profile.currentStreak>=2) gap = Math.min(50, gap+10);        // winning: push harder
+    else if(profile.currentStreak<=-2) gap = Math.max(0, gap-15);   // losing: ease up
+    else gap = Math.round(gap*0.6 + 25*0.4);                        // drift back toward +25 baseline
+    profile.ratingGap = gap;
+
+    profile.ratingHistory.push({rating:profile.rating, delta, opponent:oppElo, result, date:new Date().toISOString()});
+    if(profile.ratingHistory.length>60) profile.ratingHistory.shift();
+
+    document.getElementById('resultTitle').textContent = title;
+    document.getElementById('resultDelta').textContent = (delta>=0?'+':'')+delta;
+    document.getElementById('resultDelta').className = 'delta ' + (delta>=0?'up':'down');
+    document.getElementById('resultNote').textContent = `New rating: ${profile.rating} (opponent was ~${oppElo}). Next opponent target: ~${profile.rating+gap}. Average centipawn loss this game: ${Math.round(avgLoss*100)}.`;
+  }
+
+  // Persist the game for review and report what got recycled
+  profile.gameLog.push({
+    date: new Date().toISOString(),
+    result, opponent: gameOpponentElo, playerColor,
+    moveCount: sessionMoves.length
+  });
+  if(profile.gameLog.length>30) profile.gameLog.shift();
+
+  const errCount = sessionMoves.filter(m=>m.grade==='mistake'||m.grade==='blunder').length;
+  document.getElementById('recycleNote').textContent = errCount>0
+    ? `${errCount} position${errCount===1?'':'s'} saved to your drill queue — you'll re-attempt them in the Drills tab.`
+    : 'No mistakes or blunders this game — nothing added to the drill queue.';
+
+  const reviewBtn = document.getElementById('btnReview');
+  reviewBtn.onclick = ()=> openReview(sessionMoves.slice());
+
+  document.getElementById('resultCard').classList.add('show');
+  playResultSound(result);
+  buzz(result===1?[30,60,30,60,90]:result===0?[120,80,120]:[50,60,50]);
+  refreshHeader();
+  saveProfile();
+}
+
+/* ============================================================
+   PROGRESS VIEW
+   ============================================================ */
+function refreshProgress(){
+  document.getElementById('pStatRating').textContent = profile.rating || '—';
+  document.getElementById('pStatGames').textContent = profile.gamesPlayed;
+  const winPct = profile.gamesPlayed>0 ? Math.round(100*profile.wins/profile.gamesPlayed)+'%' : '—';
+  document.getElementById('pStatWinPct').textContent = winPct;
+  const avgCp = profile.totalMovesGraded>0 ? Math.round(100*profile.totalCpLoss/profile.totalMovesGraded) : null;
+  document.getElementById('pStatAvgLoss').textContent = avgCp!==null ? avgCp : '—';
+
+  const mLedger = document.getElementById('mistakeLedger');
+  const tags = Object.entries(profile.mistakeTags).sort((a,b)=>b[1]-a[1]);
+  if(tags.length===0){
+    mLedger.innerHTML = '<div class="empty-note">Play a few games and patterns will show up here.</div>';
+  } else {
+    mLedger.innerHTML = tags.map(([tag,count])=>`<div class="ledger-row"><span class="tag">${tag}</span><span class="count">${count}×</span></div>`).join('');
+  }
+
+  const oLedger = document.getElementById('openingLedger');
+  const recentOpenings = profile.openingMistakes.slice(-6).reverse();
+  if(recentOpenings.length===0){
+    oLedger.innerHTML = '<div class="empty-note">No opening deviations logged yet.</div>';
+  } else {
+    oLedger.innerHTML = recentOpenings.map(o=>`
+      <div class="opening-item">
+        <div class="oh">${o.line}${o.line!=='(start)'?' ':''}${o.played}</div>
+        <div class="ot">${o.note}</div>
+      </div>`).join('');
+  }
+
+  const rLedger = document.getElementById('ratingLedger');
+  const recentGames = profile.ratingHistory.slice(-8).reverse();
+  if(recentGames.length===0){
+    rLedger.innerHTML = '<div class="empty-note">No games completed yet.</div>';
+  } else {
+    rLedger.innerHTML = recentGames.map(g=>{
+      const resText = g.result===1?'Win':g.result===0.5?'Draw':'Loss';
+      const deltaText = g.delta===null ? '(diagnostic)' : (g.delta>=0?'+':'')+g.delta;
+      return `<div class="ledger-row"><span class="tag">${resText} vs ~${g.opponent}</span><span class="count">${g.rating} (${deltaText})</span></div>`;
+    }).join('');
+  }
+}
+
+/* ============================================================
+   MISTAKE RECYCLING (spaced repetition)
+   ============================================================ */
+// Leitner boxes: interval in days for each box level.
+const BOX_INTERVALS = [0, 2, 6, 14, 30, 90];
+
+function saveMistakeForRecycling(fen, played, best, loss){
+  if(!best || best===played) return;
+  // Don't store near-duplicates of the same position
+  if(profile.savedMistakes.some(m=>m.fen===fen)) return;
+
+  const g = new Chess(fen);
+  const threats = findThreats(new Chess(fenAfterMove(fen, played)));
+  let tag = 'Positional inaccuracy';
+  if(threats.bestCapture && threats.bestCapture.gain>=3) tag = 'Hanging a piece';
+  else if(threats.bestCapture && threats.bestCapture.gain>=1) tag = 'Dropped a pawn';
+  else if(threats.checkReply) tag = 'King safety lapse';
+
+  profile.savedMistakes.push({
+    fen, played, best, tag,
+    loss: Math.round(loss*100),
+    explain: `You played ${played} here. ${explainLoss(fen, played, best, loss)}`,
+    box: 0,
+    dueAt: Date.now(),           // available immediately-ish; first review after this game
+    createdAt: Date.now(),
+    timesSeen: 0,
+    timesCorrect: 0
+  });
+  if(profile.savedMistakes.length>120) profile.savedMistakes.shift();
+}
+
+function fenAfterMove(fen, san){
+  const g = new Chess(fen);
+  g.move(san);
+  return g.fen();
+}
+
+function dueMistakes(){
+  const now = Date.now();
+  return profile.savedMistakes.filter(m=>m.dueAt<=now);
+}
+
+function scheduleNext(mistake, correct){
+  mistake.timesSeen++;
+  if(correct){
+    mistake.timesCorrect++;
+    mistake.box = Math.min(BOX_INTERVALS.length-1, mistake.box+1);
+  } else {
+    mistake.box = 0;  // missed it again — back to the front of the queue
+  }
+  const days = BOX_INTERVALS[mistake.box];
+  mistake.dueAt = Date.now() + days*24*60*60*1000;
+  saveProfile();
+}
+
+/* ============================================================
+   POST-GAME REVIEW
+   ============================================================ */
+let reviewMoves = [];
+let reviewIndex = 0;
+let reviewGame = null;
+
+function openReview(moves){
+  reviewMoves = moves;
+  reviewIndex = 0;
+  document.getElementById('reviewPanel').style.display='block';
+  drawEvalGraph();
+  renderReviewAt(0);
+  document.getElementById('reviewPanel').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function renderReviewAt(i){
+  reviewIndex = Math.max(0, Math.min(reviewMoves.length-1, i));
+  const m = reviewMoves[reviewIndex];
+  if(!m) return;
+  reviewGame = new Chess(m.fenAfter);
+  renderBoardTo('reviewBoard', reviewGame, false);
+
+  const moveNo = Math.floor(reviewIndex/2)+1;
+  document.getElementById('reviewMoveLabel').textContent =
+    `Move ${moveNo} · ${m.by==='you'?'You':'Opponent'} played ${m.san}`;
+
+  const gradeEl = document.getElementById('reviewGrade');
+  if(m.grade){
+    const meta = GRADE_META[m.grade];
+    gradeEl.style.display='inline-block';
+    gradeEl.textContent = meta.label;
+    gradeEl.style.background = meta.color;
+  } else {
+    gradeEl.style.display='none';
+  }
+
+  let note = '';
+  if(m.by==='opponent'){
+    note = "Opponent's move.";
+  } else if(m.grade==='blunder' || m.grade==='mistake' || m.grade==='inaccuracy'){
+    note = `Cost about ${Math.round(m.loss*100)} centipawns. ` + explainLoss(m.fenBefore, m.san, m.best, m.loss);
+  } else {
+    note = `Good choice — ${describeMove(new Chess(m.fenBefore), m.san)}.`;
+  }
+  document.getElementById('reviewNote').textContent = note;
+  document.getElementById('reviewCounter').textContent = `${reviewIndex+1} / ${reviewMoves.length}`;
+  highlightGraph();
+}
+
+// Evaluation graph: material balance after each move, from player's perspective
+function drawEvalGraph(){
+  const c = document.getElementById('evalGraph');
+  const ctx = c.getContext('2d');
+  const W = c.width = c.clientWidth*2;
+  const H = c.height = 120;
+  ctx.clearRect(0,0,W,H);
+
+  const evals = reviewMoves.map(m=>{
+    if(typeof m.evalAfter === 'number') return Math.max(-10, Math.min(10, m.evalAfter));
+    const g = new Chess(m.fenAfter);
+    const e = evaluate(g);
+    return Math.max(-10, Math.min(10, playerColor==='w' ? e : -e));
+  });
+  const maxAbs = Math.max(3, ...evals.map(v=>Math.abs(v)));
+
+  // midline
+  ctx.strokeStyle='#2c3b4a'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(0,H/2); ctx.lineTo(W,H/2); ctx.stroke();
+
+  // area fill
+  ctx.beginPath();
+  ctx.moveTo(0,H/2);
+  evals.forEach((v,i)=>{
+    const x = (i/(Math.max(1,evals.length-1)))*W;
+    const y = H/2 - (v/maxAbs)*(H/2-6);
+    ctx.lineTo(x,y);
+  });
+  ctx.lineTo(W,H/2);
+  ctx.closePath();
+  ctx.fillStyle='rgba(211,169,78,.18)';
+  ctx.fill();
+
+  // line
+  ctx.beginPath();
+  evals.forEach((v,i)=>{
+    const x = (i/(Math.max(1,evals.length-1)))*W;
+    const y = H/2 - (v/maxAbs)*(H/2-6);
+    i===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+  });
+  ctx.strokeStyle='#d3a94e'; ctx.lineWidth=3; ctx.stroke();
+
+  // error markers
+  reviewMoves.forEach((m,i)=>{
+    if(m.grade==='blunder' || m.grade==='mistake'){
+      const x = (i/(Math.max(1,reviewMoves.length-1)))*W;
+      const y = H/2 - (evals[i]/maxAbs)*(H/2-6);
+      ctx.beginPath(); ctx.arc(x,y,7,0,Math.PI*2);
+      ctx.fillStyle = m.grade==='blunder' ? '#d9503c' : '#d98a3c';
+      ctx.fill();
+    }
+  });
+  window._reviewEvals = evals;
+}
+
+function highlightGraph(){
+  const c = document.getElementById('evalGraph');
+  if(!c || !window._reviewEvals) return;
+  drawEvalGraph();
+  const ctx = c.getContext('2d');
+  const W = c.width, H = c.height;
+  const x = (reviewIndex/(Math.max(1,reviewMoves.length-1)))*W;
+  ctx.strokeStyle='#eef1f4'; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+}
+
+document.getElementById('reviewPrev').addEventListener('click', ()=>renderReviewAt(reviewIndex-1));
+document.getElementById('reviewNext').addEventListener('click', ()=>renderReviewAt(reviewIndex+1));
+document.getElementById('reviewJumpError').addEventListener('click', ()=>{
+  for(let i=reviewIndex+1;i<reviewMoves.length;i++){
+    if(reviewMoves[i].grade==='blunder'||reviewMoves[i].grade==='mistake'){ renderReviewAt(i); return; }
+  }
+  for(let i=0;i<reviewMoves.length;i++){
+    if(reviewMoves[i].grade==='blunder'||reviewMoves[i].grade==='mistake'){ renderReviewAt(i); return; }
+  }
+  document.getElementById('reviewNote').textContent = 'No mistakes or blunders in this game — clean play.';
+});
+document.getElementById('evalGraph').addEventListener('click', (e)=>{
+  const rect = e.currentTarget.getBoundingClientRect();
+  const pct = (e.clientX-rect.left)/rect.width;
+  renderReviewAt(Math.round(pct*(reviewMoves.length-1)));
+});
+
+/* ============================================================
+   DRILLS VIEW
+   ============================================================ */
+let currentDrill = null;
+let drillSelected = null;
+let drillGame = null;
+let drillLocked = false;
+
+let currentIsRecycled = false;
+
+function pickDrill(){
+  // Priority 1: your own mistakes that are due for review
+  const due = dueMistakes();
+  if(due.length>0){
+    // oldest-due first, so nothing languishes
+    due.sort((a,b)=>a.dueAt-b.dueAt);
+    currentIsRecycled = true;
+    return due[0];
+  }
+  // Priority 2: curated drills matching your most common weakness
+  currentIsRecycled = false;
+  const tagCounts = Object.entries(profile.mistakeTags).sort((a,b)=>b[1]-a[1]);
+  let pool = DRILL_BANK;
+  if(tagCounts.length>0){
+    const topTag = tagCounts[0][0];
+    const matching = DRILL_BANK.filter(d=>d.tag===topTag);
+    if(matching.length>0) pool = matching;
+  }
+  return pool[Math.floor(Math.random()*pool.length)];
+}
+
+function updateDueBanner(){
+  const due = dueMistakes().length;
+  const total = profile.savedMistakes.length;
+  const b = document.getElementById('dueBanner');
+  if(due>0){
+    b.className = 'due-banner';
+    b.textContent = `${due} of your own mistake${due===1?'':'s'} ready to re-attempt`;
+  } else if(total>0){
+    b.className = 'due-banner none';
+    b.textContent = `All ${total} saved mistakes reviewed — next one comes back later. Showing practice puzzles.`;
+  } else {
+    b.className = 'due-banner none';
+    b.textContent = 'Play a game and your mistakes will come back here as drills.';
+  }
+}
+
+function loadDrill(){
+  updateDueBanner();
+  currentDrill = pickDrill();
+  drillGame = new Chess(currentDrill.fen);
+  drillSelected = null;
+  drillLocked = false;
+  document.getElementById('drillTag').innerHTML = currentDrill.tag +
+    (currentIsRecycled ? '<span class="recycled-badge">Your mistake</span>' : '');
+  const solution = currentIsRecycled ? currentDrill.best : currentDrill.solution;
+  document.getElementById('drillPrompt').textContent = currentIsRecycled
+    ? `You went wrong here before, playing ${currentDrill.played}. ${drillGame.turn()==='w'?'White':'Black'} to move — find the better move.`
+    : (drillGame.turn()==='w' ? 'White' : 'Black') + ' to move. Find the best move.';
+  document.getElementById('drillFeedback').textContent = '';
+  renderDrillBoard();
+}
+
+function renderDrillBoard(){
+  const el = document.getElementById('drillBoard');
+  el.innerHTML='';
+  const boardState = drillGame.board();
+  for(let r=0;r<8;r++){
+    for(let f=0;f<8;f++){
+      const sq = files[f]+(8-r);
+      const div = document.createElement('div');
+      div.className='sq '+(((r+f)%2===0)?'light':'dark');
+      div.dataset.sq=sq;
+      const piece = boardState[r][f];
+      if(piece){
+        const span=document.createElement('span');
+        span.className='piece '+(piece.color==='w'?'piece-white':'piece-black');
+        span.textContent=PIECE_GLYPH[piece.type];
+        div.appendChild(span);
+      }
+      if(drillSelected===sq) div.classList.add('selected');
+      div.addEventListener('click', onDrillSquareClick);
+      el.appendChild(div);
+    }
+  }
+  if(drillSelected){
+    const moves = drillGame.moves({square:drillSelected, verbose:true});
+    moves.forEach(m=>{
+      const e2 = el.querySelector(`[data-sq="${m.to}"]`);
+      if(e2){ e2.classList.add('legal'); if(drillGame.get(m.to)) e2.classList.add('has-piece'); }
+    });
+  }
+}
+
+function onDrillSquareClick(e){
+  if(drillLocked) return;
+  const sq = e.currentTarget.dataset.sq;
+  const piece = drillGame.get(sq);
+  if(drillSelected){
+    if(sq===drillSelected){ drillSelected=null; renderDrillBoard(); return; }
+    const legal = drillGame.moves({square:drillSelected, verbose:true}).some(m=>m.to===sq);
+    if(legal){
+      const mv = drillGame.move({from:drillSelected, to:sq, promotion:'q'});
+      drillSelected=null;
+      drillLocked=true;
+      renderDrillBoard();
+      const target = currentIsRecycled ? currentDrill.best : currentDrill.solution;
+      const strip = x => (x||'').replace(/[+#]/g,'');
+      const correct = strip(mv.san) === strip(target);
+      const fb = document.getElementById('drillFeedback');
+      if(correct){
+        fb.innerHTML = `<b style="color:var(--best)">Correct!</b> ${currentDrill.explain}` +
+          (currentIsRecycled ? ` <span style="color:var(--dim)">You'll see this again in ${BOX_INTERVALS[Math.min(BOX_INTERVALS.length-1,currentDrill.box+1)]} days.</span>` : '');
+        playGradeSound('best'); buzz([14,50,22]);
+      } else {
+        fb.innerHTML = `<b style="color:var(--blunder)">Not quite.</b> The move was <b>${target}</b> — ${currentDrill.explain}` +
+          (currentIsRecycled ? ` <span style="color:var(--dim)">This one comes back soon.</span>` : '');
+        playGradeSound('mistake'); buzz([44,60,44]);
+      }
+      if(currentIsRecycled){
+        scheduleNext(currentDrill, correct);
+        updateDueBanner();
+      }
+    } else if(piece){
+      drillSelected=sq; renderDrillBoard();
+    } else { drillSelected=null; renderDrillBoard(); }
+  } else if(piece){
+    drillSelected=sq; renderDrillBoard();
+  }
+}
+
+document.getElementById('btnNextDrill').addEventListener('click', loadDrill);
+
+/* ============================================================
+   TOGGLES + AUDIO UNLOCK
+   ============================================================ */
+const tSound = document.getElementById('toggleSound');
+const tHaptics = document.getElementById('toggleHaptics');
+
+tSound.addEventListener('click', ()=>{
+  soundOn = !soundOn;
+  tSound.classList.toggle('on', soundOn);
+  tSound.textContent = soundOn ? 'Sound on' : 'Sound off';
+  if(soundOn){ ensureAudio(); tone(560,0,0.09,'sine',0.12); }
+});
+
+tHaptics.addEventListener('click', ()=>{
+  hapticsOn = !hapticsOn;
+  tHaptics.classList.toggle('on', hapticsOn);
+  tHaptics.textContent = hapticsOn ? 'Haptics on' : 'Haptics off';
+  if(hapticsOn) buzz([18]);
+});
+
+// Browsers block audio until a user gesture — unlock on first tap.
+function unlockAudio(){
+  ensureAudio();
+  document.removeEventListener('touchstart', unlockAudio);
+  document.removeEventListener('click', unlockAudio);
+}
+document.addEventListener('touchstart', unlockAudio, {passive:true});
+document.addEventListener('click', unlockAudio);
+
+// Vibration isn't supported on iOS Safari — reflect that instead of pretending.
+if(!('vibrate' in navigator)){
+  hapticsOn = false;
+  tHaptics.classList.remove('on');
+  tHaptics.textContent = 'Haptics n/a';
+  tHaptics.title = 'This browser does not support vibration';
+}
+
+/* ============================================================
+   INIT
+   ============================================================ */
+(async function boot(){
+  const ok = await initEngine();
+  const st = document.getElementById('engineStatus');
+  if(ok){
+    st.textContent = 'Stockfish ready';
+    st.classList.add('on');
+  } else {
+    st.textContent = 'Basic engine';
+    st.title = 'Stockfish failed to load — using the built-in fallback engine.';
+  }
+  loadProfile();
+})();
+</script>
+</body>
+</html>
