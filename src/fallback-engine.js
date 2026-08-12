@@ -41,22 +41,113 @@ function evaluate(g){
       score += pc.color==='w' ? v : -v;
     }
   }
-  // small castling bonus
-  const hist = g.history();
-  if(hist.includes('O-O') || hist.includes('O-O-O')){
-    // can't tell which color easily post-hoc cheaply; skip fine-grained, use small flat nudge
-  }
   return score;
 }
 
-function minimax(g, depth, alpha, beta, maximizing){
-  if(depth===0 || g.game_over()) return evaluate(g);
+// Standard "simplified evaluation function" piece-square tables (Tomasz
+// Michniewski), in centipawns, White's perspective, row0 = rank8. Used only
+// by evaluatePositional (see below) — NOT by plain evaluate(), which stays
+// pure material so positionComplexity (FEATURESPEC.md Layer 1.4) and the
+// player's own move-grading fallback keep meaning exactly what they're
+// tested and calibrated against.
+const PST = {
+  p: [
+     0,  0,  0,  0,  0,  0,  0,  0,
+    50, 50, 50, 50, 50, 50, 50, 50,
+    10, 10, 20, 30, 30, 20, 10, 10,
+     5,  5, 10, 25, 25, 10,  5,  5,
+     0,  0,  0, 20, 20,  0,  0,  0,
+     5, -5,-10,  0,  0,-10, -5,  5,
+     5, 10, 10,-20,-20, 10, 10,  5,
+     0,  0,  0,  0,  0,  0,  0,  0,
+  ],
+  n: [
+    -50,-40,-30,-30,-30,-30,-40,-50,
+    -40,-20,  0,  0,  0,  0,-20,-40,
+    -30,  0, 10, 15, 15, 10,  0,-30,
+    -30,  5, 15, 20, 20, 15,  5,-30,
+    -30,  0, 15, 20, 20, 15,  0,-30,
+    -30,  5, 10, 15, 15, 10,  5,-30,
+    -40,-20,  0,  5,  5,  0,-20,-40,
+    -50,-40,-30,-30,-30,-30,-40,-50,
+  ],
+  b: [
+    -20,-10,-10,-10,-10,-10,-10,-20,
+    -10,  0,  0,  0,  0,  0,  0,-10,
+    -10,  0,  5, 10, 10,  5,  0,-10,
+    -10,  5,  5, 10, 10,  5,  5,-10,
+    -10,  0, 10, 10, 10, 10,  0,-10,
+    -10, 10, 10, 10, 10, 10, 10,-10,
+    -10,  5,  0,  0,  0,  0,  5,-10,
+    -20,-10,-10,-10,-10,-10,-10,-20,
+  ],
+  r: [
+      0,  0,  0,  0,  0,  0,  0,  0,
+      5, 10, 10, 10, 10, 10, 10,  5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+     -5,  0,  0,  0,  0,  0,  0, -5,
+      0,  0,  0,  5,  5,  0,  0,  0,
+  ],
+  q: [
+    -20,-10,-10, -5, -5,-10,-10,-20,
+    -10,  0,  0,  0,  0,  0,  0,-10,
+    -10,  0,  5,  5,  5,  5,  0,-10,
+     -5,  0,  5,  5,  5,  5,  0, -5,
+      0,  0,  5,  5,  5,  5,  0, -5,
+    -10,  5,  5,  5,  5,  5,  0,-10,
+    -10,  0,  5,  0,  0,  0,  0,-10,
+    -20,-10,-10, -5, -5,-10,-10,-20,
+  ],
+  k: [
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -20,-30,-30,-40,-40,-30,-30,-20,
+    -10,-20,-20,-20,-20,-20,-20,-10,
+     20, 20,  0,  0,  0,  0, 20, 20,
+     20, 30, 10,  0,  0, 10, 30, 20,
+  ],
+};
+
+// Material plus lightweight positional bonuses (development, king safety,
+// central control). Used only for the engine's OWN move selection
+// (pickEngineMove), never for grading. Without any positional signal, every
+// quiet move in a position with no captures on the board scores identically
+// under plain evaluate() — the depth-limited minimax (no move ordering) then
+// has nothing to break ties with beyond move-generation order, which is
+// exactly why the fallback bot was observed shuffling a rook back and forth
+// (Rb8/Ra8/Rb8) instead of developing: every alternative looked exactly as
+// good as that shuffle.
+function evaluatePositional(g){
+  const base = evaluate(g);
+  if(Math.abs(base) >= MATE_SCORE) return base; // terminal position, PST is meaningless
+  let bonus = 0;
+  const b = g.board();
+  for(let r=0;r<8;r++) for(let f=0;f<8;f++){
+    const pc = b[r][f];
+    if(!pc) continue;
+    const table = PST[pc.type];
+    if(!table) continue;
+    const idx = pc.color==='w' ? r*8+f : (7-r)*8+f;
+    const v = table[idx]/100; // centipawns -> pawn units, matching VALUES scale
+    bonus += pc.color==='w' ? v : -v;
+  }
+  return base + bonus;
+}
+
+function minimax(g, depth, alpha, beta, maximizing, evalFn){
+  const ef = evalFn || evaluate;
+  if(depth===0 || g.game_over()) return ef(g);
   const moves = g.moves();
   if(maximizing){
     let maxEval = -Infinity;
     for(const m of moves){
       g.move(m);
-      const ev = minimax(g, depth-1, alpha, beta, false);
+      const ev = minimax(g, depth-1, alpha, beta, false, ef);
       g.undo();
       maxEval = Math.max(maxEval, ev);
       alpha = Math.max(alpha, ev);
@@ -67,7 +158,7 @@ function minimax(g, depth, alpha, beta, maximizing){
     let minEval = Infinity;
     for(const m of moves){
       g.move(m);
-      const ev = minimax(g, depth-1, alpha, beta, true);
+      const ev = minimax(g, depth-1, alpha, beta, true, ef);
       g.undo();
       minEval = Math.min(minEval, ev);
       beta = Math.min(beta, ev);
@@ -77,13 +168,16 @@ function minimax(g, depth, alpha, beta, maximizing){
   }
 }
 
-// Returns ranked list of {move, score} for every legal move at current position, from white's-perspective score
-function searchRoot(g, depth){
+// Returns ranked list of {move, score} for every legal move at current
+// position, from white's-perspective score. `evalFn` defaults to the plain
+// material evaluate() — pass evaluatePositional explicitly (as
+// pickEngineMove does) to rank by material+PST instead.
+function searchRoot(g, depth, evalFn){
   const moves = g.moves({verbose:true});
   const ranked = [];
   for(const m of moves){
     g.move(m.san);
-    const score = minimax(g, depth-1, -Infinity, Infinity, g.turn()==='w');
+    const score = minimax(g, depth-1, -Infinity, Infinity, g.turn()==='w', evalFn);
     g.undo();
     ranked.push({san:m.san, from:m.from, to:m.to, flags:m.flags, captured:m.captured, score});
   }
@@ -143,7 +237,7 @@ function pickEngineMove(g, elo){
   // Hard clamp as a second line of defense — this fallback minimax must never
   // run past depth 3 or it can hang the tab regardless of what's passed in.
   const safeDepth = Math.max(1, Math.min(3, fbDepth));
-  const ranked = searchRoot(g, safeDepth);
+  const ranked = searchRoot(g, safeDepth, evaluatePositional);
   if(ranked.length===0) return null;
   if(Math.random() < blunderChance && ranked.length>1){
     // pick a suboptimal move to simulate a weaker player, biased toward the worse half
@@ -156,5 +250,5 @@ function pickEngineMove(g, elo){
 // Node/Vitest can require() this file directly; the browser (classic
 // <script> tag, no `module` global) just skips this block.
 if(typeof module !== 'undefined' && module.exports){
-  module.exports = { VALUES, MATE_SCORE, evaluate, minimax, searchRoot, engineParamsForElo, pickEngineMove, positionComplexity };
+  module.exports = { VALUES, MATE_SCORE, evaluate, evaluatePositional, minimax, searchRoot, engineParamsForElo, pickEngineMove, positionComplexity };
 }

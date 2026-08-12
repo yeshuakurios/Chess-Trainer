@@ -27,7 +27,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const { Chess } = require('chess.js');
-const { pickEngineMove, engineParamsForElo, searchRoot, positionComplexity } = require('../src/fallback-engine.js');
+const { pickEngineMove, engineParamsForElo, searchRoot, positionComplexity, evaluatePositional, MATE_SCORE } = require('../src/fallback-engine.js');
 
 // 4x the slowest fbDepth<=2 measurement seen on this host (~1.6s) — enough
 // headroom to absorb this sandbox's observed run-to-run CPU variance without
@@ -161,4 +161,55 @@ describe('positionComplexity (src/fallback-engine.js)', () => {
     const result = positionComplexity(fen);
     expect(result).toEqual({legalMoveCount:0, closeMoveCount:0});
   });
+});
+
+// Regression test for a live bug report: the opponent bot (in "Basic engine"
+// fallback mode) was observed shuffling a rook back and forth (Rb8/Ra8/Rb8)
+// instead of developing. Root cause: plain evaluate() is pure material count,
+// so in any quiet position every legal move scores identically, and the
+// depth-limited minimax then has nothing to break ties with beyond
+// chess.js's move-generation order — Rb8 simply came first. evaluatePositional
+// adds piece-square-table bonuses (development/king-safety/central-control)
+// so quiet moves stop tying, without touching plain evaluate() itself (which
+// backs positionComplexity and the player's own move-grading fallback, both
+// tested/calibrated against pure material above).
+describe('evaluatePositional (src/fallback-engine.js)', () => {
+  it('prefers a centralized knight over the same material with the knight on the rim', () => {
+    const centralized = new Chess('rnbqkb1r/pppppppp/5n2/8/8/2N5/PPPPPPPP/R1BQKBNR w KQkq - 2 2');
+    const rim = new Chess('rnbqkb1r/pppppppp/5n2/8/8/N7/PPPPPPPP/R1BQKBNR w KQkq - 2 2');
+    expect(evaluatePositional(centralized)).toBeGreaterThan(evaluatePositional(rim));
+  });
+
+  it('still returns a mate score untouched by positional bonuses', () => {
+    const fen = 'rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3'; // fool's mate
+    expect(evaluatePositional(new Chess(fen))).toBe(-MATE_SCORE);
+  });
+
+  it('reproduces the reported position and ranks the pointless rook shuffle below real development', () => {
+    // Exact position from the bug report: 1.f4 Nc6 2.Nf3, Black to move.
+    const g = new Chess();
+    g.move('f4'); g.move('Nc6'); g.move('Nf3');
+    const ranked = searchRoot(g, 1, evaluatePositional);
+    const rb8Rank = ranked.findIndex(r => r.san === 'Rb8') + 1;
+    // Rb8 must not be tied for best (rank 1) the way it was under plain
+    // material evaluate() — real development should now outrank it.
+    expect(rb8Rank).toBeGreaterThan(1);
+    expect(ranked[0].san).not.toBe('Rb8');
+  });
+
+  it('pickEngineMove no longer gets stuck oscillating a rook when material is tied', () => {
+    // Elo 1200 (fbDepth 2, blunderChance ~19%) — fast enough for several
+    // trials per run; fbDepth 3 (elo >=~1600) takes multiple seconds per
+    // call (see the fbDepth-timing comment atop this file) and isn't needed
+    // to exercise the tie-breaking this test cares about.
+    const g = new Chess();
+    g.move('f4'); g.move('Nc6'); g.move('Nf3');
+    let shuffleCount = 0;
+    const trials = 5;
+    for(let i=0;i<trials;i++){
+      const choice = pickEngineMove(g, 1200);
+      if(choice.san === 'Rb8') shuffleCount++;
+    }
+    expect(shuffleCount).toBeLessThan(trials); // not picked every single time
+  }, 20000);
 });
