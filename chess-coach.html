@@ -755,12 +755,14 @@ async function checkOpeningBook(mv, loss, preMoveFEN){
   if(explorerData){
     const classification = classifyOpeningMove(explorerData, mv.san);
     if(classification && !classification.isSound && loss>0.3){
+      const note = openingMoveCallout(classification, mv.san);
       profile.openingMistakes.push({
         line: priorHistory.join(' ') || '(start)',
         played: mv.san,
-        note: openingMoveCallout(classification, mv.san)
+        note
       });
       if(profile.openingMistakes.length>40) profile.openingMistakes.shift();
+      showOpeningFeedback(mv, loss, plyIndex, note);
     }
     return;
   }
@@ -773,13 +775,34 @@ async function checkOpeningBook(mv, loss, preMoveFEN){
   const goodMoves = entry.map(e=>e.san);
   if(!goodMoves.includes(mv.san) && loss>0.3){
     const alt = entry[0];
+    const note = `A well-known continuation here is ${alt.san} — ${alt.note}`;
     profile.openingMistakes.push({
       line: priorHistory.join(' ') || '(start)',
       played: mv.san,
-      note: `A well-known continuation here is ${alt.san} — ${alt.note}`
+      note
     });
     if(profile.openingMistakes.length>40) profile.openingMistakes.shift();
+    showOpeningFeedback(mv, loss, plyIndex, note);
   }
+}
+
+// checkOpeningBook resolves well after showFeedback() already painted the
+// generic engine-loss text onto the card (it's an async network round trip;
+// showFeedback is synchronous). Without this, opening-theory reasoning only
+// ever reached the Progress tab's ledger and the player never saw it on the
+// move that actually prompted it — the card kept showing generic
+// centipawn-loss language even when we *know* exactly which book move they
+// should have played instead. Upgrades the live card in place, but only if
+// the player hasn't already moved on (staleness guard: plyIndex must still
+// match the current game length) and the card is still showing this move.
+function showOpeningFeedback(mv, loss, plyIndex, note){
+  if(!note) return;
+  if(game.history().length !== plyIndex) return; // player already moved again
+  const moveLabel = document.getElementById('gradeMove');
+  if(!moveLabel || moveLabel.textContent !== mv.san) return;
+  const cp = Math.round(Math.max(0,loss)*100);
+  document.getElementById('gradeText').textContent =
+    `This deviates from established opening theory — roughly ${cp} centipawns lost. ${note}`;
 }
 
 // pieceName, findThreats, describeMove, explainLoss moved to src/grading.js
