@@ -10,9 +10,12 @@
 // block below exists specifically to guard against that inversion recurring.
 import { describe, it, expect } from 'vitest';
 import { createRequire } from 'module';
+import { Chess } from 'chess.js';
 
 const require = createRequire(import.meta.url);
-const { classify, thresholdFactorForRating } = require('../src/grading.js');
+const {
+  classify, thresholdFactorForRating, tagMistake, classifyTacticalMotif, explainLoss
+} = require('../src/grading.js');
 
 describe('thresholdFactorForRating', () => {
   it('returns the neutral factor (1) when no rating is set yet', () => {
@@ -114,5 +117,53 @@ describe('grading direction across ratingFactor (regression guard for the invers
     const neutralGrade = classify(loss, false, false, false, 1);
     const beginnerGrade = classify(loss, false, false, false, thresholdFactorForRating(1000));
     expect(severityOf(beginnerGrade)).toBeLessThanOrEqual(severityOf(neutralGrade));
+  });
+});
+
+// Integration coverage for the Layer 1.1 wiring: tagMistake() and
+// explainLoss() now consult src/tactics.js's motif detectors via
+// classifyTacticalMotif() instead of only recognizing generic
+// captures/checks. src/tactics.test.js already covers each detector in
+// depth against textbook positions — this just confirms grading.js wires
+// them through correctly end to end.
+describe('classifyTacticalMotif / tagMistake / explainLoss (Layer 1.1 wiring)', () => {
+  // Same knight-fork position as src/tactics.test.js, extended one ply
+  // earlier: Black plays a harmless waiting move (h6), then White's Nc6
+  // forks the rook on a7 and the queen on d8.
+  const preBlunderFen = '3q2k1/r6p/8/8/1N6/8/8/4K3 b - - 0 1';
+  const blunderSan = 'h6';
+  const replySan = 'Nc6';
+
+  it('classifyTacticalMotif identifies the fork from the pre-blunder position and the reply alone', () => {
+    const g = new Chess(preBlunderFen);
+    g.move(blunderSan);
+    const fenBeforeReply = g.fen();
+    const motif = classifyTacticalMotif(preBlunderFen, fenBeforeReply, replySan, 'b');
+    expect(motif).not.toBeNull();
+    expect(motif.motif).toBe('fork');
+  });
+
+  it('tagMistake reports the specific motif instead of a generic bucket', () => {
+    const g = new Chess(preBlunderFen);
+    g.move(blunderSan);
+    const tag = tagMistake(preBlunderFen, g.fen(), replySan, 'b');
+    expect(tag).toBe('Walked into a fork');
+  });
+
+  it('tagMistake falls back to a generic bucket when no reply is available', () => {
+    const g = new Chess(preBlunderFen);
+    g.move(blunderSan);
+    expect(tagMistake(preBlunderFen, g.fen(), null, 'b')).toBe('Positional inaccuracy');
+  });
+
+  it('explainLoss names the exact mechanism when a reply is supplied', () => {
+    const explanation = explainLoss(preBlunderFen, blunderSan, null, 0.5, replySan);
+    expect(explanation).toMatch(/fork/i);
+    expect(explanation).toMatch(/knight/i);
+  });
+
+  it('explainLoss falls back to the older generic explanation when no reply is supplied (backward compatible)', () => {
+    const explanation = explainLoss(preBlunderFen, blunderSan, null, 0.5);
+    expect(explanation).not.toMatch(/fork/i);
   });
 });

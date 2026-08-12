@@ -20,6 +20,16 @@ if(typeof Chess === 'undefined' && typeof require === 'function'){
 if(typeof VALUES === 'undefined' && typeof require === 'function'){
   global.VALUES = require('./fallback-engine.js').VALUES;
 }
+if(typeof detectFork === 'undefined' && typeof require === 'function'){
+  const tactics = require('./tactics.js');
+  global.detectFork = tactics.detectFork;
+  global.detectPin = tactics.detectPin;
+  global.detectSkewer = tactics.detectSkewer;
+  global.detectDiscoveredAttack = tactics.detectDiscoveredAttack;
+  global.detectRemovingDefender = tactics.detectRemovingDefender;
+  global.detectOverloadedDefender = tactics.detectOverloadedDefender;
+  global.detectBackRankWeakness = tactics.detectBackRankWeakness;
+}
 
 // Grading thresholds scale with the player's rating: the same 100-centipawn
 // slip is a minor inaccuracy for a beginner and a real mistake for a 1900.
@@ -51,18 +61,105 @@ function classify(loss, wasTop, sacrificed, deliversMate, ratingFactor){
   return 'blunder';
 }
 
-function tagMistake(g, moverColor, opponentBestReply){
-  if(opponentBestReply && opponentBestReply.captured){
-    const v = VALUES[opponentBestReply.captured];
-    if(v>=3) return 'Hanging a piece';
-    return 'Dropped a pawn';
-  }
-  if(opponentBestReply && /\+/.test(opponentBestReply.san)) return 'King safety lapse';
-  return 'Positional inaccuracy';
-}
-
 function pieceName(t){
   return {p:'pawn',n:'knight',b:'bishop',r:'rook',q:'queen',k:'king'}[t] || 'piece';
+}
+
+// Runs the Layer-1.1 motif detectors in priority order and returns the
+// first (most significant) match, or null if none apply. `playerColor` is
+// the color of the player who just made the mistake — i.e. whose pieces
+// might now be forked/pinned/skewered/etc. `replySan` is the opponent's
+// actual best reply after that mistake (from Stockfish's bestmove, or the
+// fallback search when Stockfish isn't available) — without a real reply
+// to analyze, no motif can be identified.
+function classifyTacticalMotif(fenBeforePlayerMove, fenBeforeReply, replySan, playerColor){
+  if(!replySan || !fenBeforeReply) return null;
+  const g = new Chess(fenBeforeReply);
+  const mv = g.move(replySan);
+  if(!mv) return null;
+  const fenAfterReply = g.fen();
+
+  const backRank = detectBackRankWeakness(fenAfterReply, playerColor);
+  if(backRank) return backRank;
+  const fork = detectFork(fenBeforeReply, replySan);
+  if(fork) return fork;
+  const skewer = detectSkewer(fenAfterReply, playerColor);
+  if(skewer) return skewer;
+  const pin = detectPin(fenAfterReply, playerColor);
+  if(pin) return pin;
+  const discovered = detectDiscoveredAttack(fenBeforeReply, replySan);
+  if(discovered) return discovered;
+  const removingDefender = detectRemovingDefender(fenBeforeReply, replySan, playerColor);
+  if(removingDefender) return removingDefender;
+  if(fenBeforePlayerMove){
+    const overloaded = detectOverloadedDefender(fenBeforePlayerMove, playerColor);
+    if(overloaded) return overloaded;
+  }
+  return null;
+}
+
+// Short label for the mistake ledger / drill tags.
+function motifTagLabel(motif){
+  switch(motif.motif){
+    case 'fork': return 'Walked into a fork';
+    case 'pin': return 'Walked into a pin';
+    case 'skewer': return 'Walked into a skewer';
+    case 'discovered attack': return 'Walked into a discovered attack';
+    case 'removing the defender': return 'Left a piece undefended';
+    case 'overloaded defender': return 'Overloaded a defender';
+    case 'back rank weakness': return 'Back rank weakness';
+    default: return 'Positional inaccuracy';
+  }
+}
+
+// Full sentence naming the exact tactical mechanism, for explainLoss().
+function describeMotif(motif){
+  switch(motif.motif){
+    case 'fork': {
+      const targets = motif.targets.map(t => `your ${pieceName(t.piece)} on ${t.square}`).join(' and ');
+      return `That walks into a fork — the opponent's ${pieceName(motif.attackerPiece)} on ${motif.attackerSquare} now attacks ${targets} at once.`;
+    }
+    case 'pin': {
+      const behind = motif.behindPiece==='k' ? 'king' : pieceName(motif.behindPiece);
+      return `That walks into a pin — your ${pieceName(motif.pinnedPiece)} on ${motif.pinnedSquare} can't move without exposing your ${behind} on ${motif.behindSquare} to the opponent's ${pieceName(motif.attackerPiece)} on ${motif.attackerSquare}.`;
+    }
+    case 'skewer': {
+      const front = motif.frontPiece==='k' ? 'king' : pieceName(motif.frontPiece);
+      return `That walks into a skewer — the opponent's ${pieceName(motif.attackerPiece)} on ${motif.attackerSquare} attacks your ${front} on ${motif.frontSquare}, and once it moves, your ${pieceName(motif.behindPiece)} on ${motif.behindSquare} falls too.`;
+    }
+    case 'discovered attack': {
+      const target = motif.targetPiece==='k' ? 'king' : pieceName(motif.targetPiece);
+      return `That walks into a discovered attack — moving the ${pieceName(motif.moverPiece)} to ${motif.moverSquare} uncovers the opponent's ${pieceName(motif.revealedPiece)} on ${motif.revealedFrom}, which now attacks your ${target} on ${motif.targetSquare}.`;
+    }
+    case 'removing the defender':
+      return `That removes the defender — the opponent captured your ${pieceName(motif.removedPiece)} on ${motif.removedSquare}, which was the only piece defending your ${pieceName(motif.hangingPiece)} on ${motif.hangingSquare}. It's hanging now.`;
+    case 'overloaded defender':
+      return `Your ${pieceName(motif.defenderPiece)} on ${motif.defenderSquare} was overloaded — it was the sole defender of ${motif.dependentSquares.length} pieces (${motif.dependentSquares.join(', ')}), more than it could actually cover.`;
+    case 'back rank weakness':
+      return `Your king on ${motif.kingSquare} is boxed in on the back rank with no escape square and nothing covering it — a real back-rank danger.`;
+    default:
+      return '';
+  }
+}
+
+// tagMistake identifies the specific tactical motif the opponent's reply
+// exploited (fork, pin, skewer, ...), falling back to the older generic
+// buckets (Hanging a piece / Dropped a pawn / King safety lapse /
+// Positional inaccuracy) when no specific motif is detected — e.g. a slow
+// positional slip rather than a concrete tactic.
+function tagMistake(fenBeforePlayerMove, fenBeforeReply, replySan, playerColor){
+  const motif = classifyTacticalMotif(fenBeforePlayerMove, fenBeforeReply, replySan, playerColor);
+  if(motif) return motifTagLabel(motif);
+
+  if(replySan && fenBeforeReply){
+    const g = new Chess(fenBeforeReply);
+    const mv = g.move(replySan);
+    if(mv && mv.captured){
+      return VALUES[mv.captured]>=3 ? 'Hanging a piece' : 'Dropped a pawn';
+    }
+    if(mv && /\+/.test(mv.san)) return 'King safety lapse';
+  }
+  return 'Positional inaccuracy';
 }
 
 // What does the opponent threaten in the CURRENT position (after your move)?
@@ -115,11 +212,23 @@ function describeMove(g, san){
   return parts.slice(0,2).join(', and ');
 }
 
-// Explain WHY the played move lost value
-function explainLoss(preFEN, playedSan, bestSan, loss){
+// Explain WHY the played move lost value. `replySan` (optional) is the
+// opponent's actual best reply — when present, prefer naming the exact
+// tactical mechanism it exploits (fork, pin, skewer, ...) over the older,
+// generic "undefended piece" / "exposes your king" framing below, which
+// only sees captures and checks and can't name a specific motif.
+function explainLoss(preFEN, playedSan, bestSan, loss, replySan){
   const before = new Chess(preFEN);
   const after = new Chess(preFEN);
-  after.move(playedSan);
+  const playedMv = after.move(playedSan);
+
+  if(playedMv && replySan){
+    const motif = classifyTacticalMotif(preFEN, after.fen(), replySan, playedMv.color);
+    if(motif){
+      const bestWhy = bestSan ? ` Better was ${bestSan}, because ${describeMove(before, bestSan)}.` : '';
+      return describeMotif(motif) + bestWhy;
+    }
+  }
 
   const threats = findThreats(after);
   let why = '';
@@ -153,6 +262,6 @@ function explainLoss(preFEN, playedSan, bestSan, loss){
 if(typeof module !== 'undefined' && module.exports){
   module.exports = {
     thresholdFactorForRating, classify, tagMistake, pieceName, findThreats,
-    describeMove, explainLoss
+    describeMove, explainLoss, classifyTacticalMotif, motifTagLabel, describeMotif
   };
 }

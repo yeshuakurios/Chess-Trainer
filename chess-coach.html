@@ -8,6 +8,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js"></script>
 <script src="src/fallback-engine.js"></script>
 <script src="src/engine.js"></script>
+<script src="src/tactics.js"></script>
 <script src="src/grading.js"></script>
 <style>
 :root{
@@ -593,12 +594,23 @@ async function makePlayerMove(from, to){
   playMoveSound(!!mv.captured);
   render();
 
+  const fenAfterYourMove = game.fen();
+
   // Eval AFTER your move (opponent to move, so negate to get your perspective).
+  // Also capture the opponent's actual best reply here — it's the same
+  // engine call, just previously discarding `bestmove` after reading the
+  // eval out of it. This is what tactical motif detection (fork/pin/skewer/
+  // etc.) analyzes: it needs a real reply to check, not just a score.
   let evalAfter = null;
+  let replySan = null;
   if(engineReady && !game.game_over()){
-    const after = await sfAnalyze(game.fen(), GRADE_DEPTH); // full strength, no elo limiter
+    const after = await sfAnalyze(fenAfterYourMove, GRADE_DEPTH); // full strength, no elo limiter
     const oppPov = scoreToPawns(after);
     if(oppPov !== null) evalAfter = -oppPov;
+    if(after && after.bestmove){
+      const t = uciToMove(fenAfterYourMove, after.bestmove);
+      if(t) replySan = t.san;
+    }
   }
 
   let loss = 0;
@@ -617,6 +629,16 @@ async function makePlayerMove(from, to){
   }
   loss = Math.max(0, Math.min(20, loss));
 
+  // Still no concrete reply to analyze (Stockfish wasn't ready, or returned
+  // nothing usable) — fall back to a shallow search of the post-move
+  // position. Depth 2 stays well within the fallback engine's safe range
+  // (see fbDepth in engineParamsForElo) and this only runs once per move.
+  if(!replySan && !game.game_over()){
+    const gReply = new Chess(fenAfterYourMove);
+    const rankedReply = searchRoot(gReply, 2);
+    if(rankedReply.length) replySan = rankedReply[0].san;
+  }
+
   const deliversMate = mv.san.includes('#');
   const wasTop = bestSan && bestSan===mv.san;
   const sacrificed = false;
@@ -624,15 +646,14 @@ async function makePlayerMove(from, to){
   const grade = deliversMate ? 'brilliant' : classify(loss, wasTop, sacrificed, deliversMate, ratingFactor);
 
   const bestEntry = bestSan ? {san:bestSan} : null;
-  showFeedback(grade, mv.san, loss, null, bestEntry, preMoveFEN);
+  showFeedback(grade, mv.san, loss, null, bestEntry, preMoveFEN, replySan);
 
   checkOpeningBook(mv, loss);
 
   if((grade==='mistake' || grade==='blunder') && !deliversMate){
-    const oppBest = bestEntry || {san:bestSan};
-    const tag = tagMistake(game, playerColor, null);
+    const tag = tagMistake(preMoveFEN, fenAfterYourMove, replySan, playerColor);
     profile.mistakeTags[tag] = (profile.mistakeTags[tag]||0)+1;
-    saveMistakeForRecycling(preMoveFEN, mv.san, bestSan, loss);
+    saveMistakeForRecycling(preMoveFEN, mv.san, bestSan, loss, replySan);
   }
 
   sessionCpLossTotal += loss;
@@ -640,7 +661,7 @@ async function makePlayerMove(from, to){
   sessionMoves.push({
     san: mv.san, grade, loss,
     fenBefore: preMoveFEN, fenAfter: game.fen(),
-    best: bestSan, by:'you',
+    best: bestSan, replySan, by:'you',
     evalAfter: (evalAfter !== null ? evalAfter : undefined)
   });
 
@@ -676,7 +697,7 @@ function checkOpeningBook(mv, loss){
 
 // pieceName, findThreats, describeMove, explainLoss moved to src/grading.js
 
-function showFeedback(grade, san, loss, playedEntry, bestEntry, preFEN){
+function showFeedback(grade, san, loss, playedEntry, bestEntry, preFEN, replySan){
   const meta = GRADE_META[grade];
   const card = document.getElementById('feedbackCard');
   card.classList.add('show');
@@ -710,7 +731,7 @@ function showFeedback(grade, san, loss, playedEntry, bestEntry, preFEN){
     const severity = grade==='inaccuracy' ? 'This slightly loosens your position' :
                      grade==='mistake' ? 'This costs real material or safety' :
                      'This is a serious error';
-    text = `${severity} — roughly ${cp} centipawns. ` + explainLoss(preFEN, san, bestSan, loss);
+    text = `${severity} — roughly ${cp} centipawns. ` + explainLoss(preFEN, san, bestSan, loss, replySan);
   }
   document.getElementById('gradeText').textContent = text;
 
@@ -1076,22 +1097,18 @@ function refreshProgress(){
 // Leitner boxes: interval in days for each box level.
 const BOX_INTERVALS = [0, 2, 6, 14, 30, 90];
 
-function saveMistakeForRecycling(fen, played, best, loss){
+function saveMistakeForRecycling(fen, played, best, loss, replySan){
   if(!best || best===played) return;
   // Don't store near-duplicates of the same position
   if(profile.savedMistakes.some(m=>m.fen===fen)) return;
 
-  const g = new Chess(fen);
-  const threats = findThreats(new Chess(fenAfterMove(fen, played)));
-  let tag = 'Positional inaccuracy';
-  if(threats.bestCapture && threats.bestCapture.gain>=3) tag = 'Hanging a piece';
-  else if(threats.bestCapture && threats.bestCapture.gain>=1) tag = 'Dropped a pawn';
-  else if(threats.checkReply) tag = 'King safety lapse';
+  const moverColor = new Chess(fen).turn();
+  const tag = tagMistake(fen, fenAfterMove(fen, played), replySan, moverColor);
 
   profile.savedMistakes.push({
     fen, played, best, tag,
     loss: Math.round(loss*100),
-    explain: `You played ${played} here. ${explainLoss(fen, played, best, loss)}`,
+    explain: `You played ${played} here. ${explainLoss(fen, played, best, loss, replySan)}`,
     box: 0,
     dueAt: Date.now(),           // available immediately-ish; first review after this game
     createdAt: Date.now(),
@@ -1166,7 +1183,7 @@ function renderReviewAt(i){
   if(m.by==='opponent'){
     note = "Opponent's move.";
   } else if(m.grade==='blunder' || m.grade==='mistake' || m.grade==='inaccuracy'){
-    note = `Cost about ${Math.round(m.loss*100)} centipawns. ` + explainLoss(m.fenBefore, m.san, m.best, m.loss);
+    note = `Cost about ${Math.round(m.loss*100)} centipawns. ` + explainLoss(m.fenBefore, m.san, m.best, m.loss, m.replySan);
   } else {
     note = `Good choice — ${describeMove(new Chess(m.fenBefore), m.san)}.`;
   }
