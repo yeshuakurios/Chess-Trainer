@@ -18,7 +18,9 @@ if(typeof Chess === 'undefined' && typeof require === 'function'){
   global.Chess = require('chess.js').Chess;
 }
 if(typeof VALUES === 'undefined' && typeof require === 'function'){
-  global.VALUES = require('./fallback-engine.js').VALUES;
+  const fallback = require('./fallback-engine.js');
+  global.VALUES = fallback.VALUES;
+  global.searchRoot = fallback.searchRoot;
 }
 if(typeof detectFork === 'undefined' && typeof require === 'function'){
   const tactics = require('./tactics.js');
@@ -59,6 +61,67 @@ function classify(loss, wasTop, sacrificed, deliversMate, ratingFactor){
   if(loss<=0.75/f) return 'inaccuracy';
   if(loss<=1.75/f) return 'mistake';
   return 'blunder';
+}
+
+function materialCount(g, color){
+  let total = 0;
+  const board = g.board();
+  for(let r=0;r<8;r++) for(let f=0;f<8;f++){
+    const pc = board[r][f];
+    if(pc && pc.color===color) total += VALUES[pc.type];
+  }
+  return total;
+}
+
+// Player's material MINUS opponent's material — the relative balance, not
+// just one side's raw total. Raw totals alone can't tell a sacrifice from
+// an ordinary trade: after a plain knight-for-knight swap, the player's OWN
+// piece count is down 3 (their knight got recaptured) even though nothing
+// was actually lost overall, because they captured a knight of equal value
+// on their own move first. The differential nets that out correctly.
+function materialDiff(g, color){
+  const enemy = color==='w' ? 'b' : 'w';
+  return materialCount(g, color) - materialCount(g, enemy);
+}
+
+// Was the played move a genuine material sacrifice, not just an ordinary
+// trade? Plays out [player's move, opponent's actual best reply, player's
+// own best follow-up] and compares the player's material balance before
+// vs. after that sequence. The follow-up step is what separates a
+// sacrifice from a trade: if a normal recapture brings the balance back to
+// roughly even, this was never really a sacrifice. The follow-up search
+// reuses the existing synchronous fallback minimax (searchRoot) at a
+// shallow depth deliberately — this is a secondary refinement check, not
+// primary grading, so it shouldn't add another async engine round-trip on
+// top of the two (before/after) analysis calls grading already makes per move.
+function detectSacrifice(preMoveFEN, playedSan, replySan, playerColor){
+  if(!replySan) return {sacrificed:false, materialLost:0};
+  const diffBefore = materialDiff(new Chess(preMoveFEN), playerColor);
+
+  const g = new Chess(preMoveFEN);
+  const playedMv = g.move(playedSan);
+  if(!playedMv) return {sacrificed:false, materialLost:0};
+  const replyMv = g.move(replySan);
+  if(!replyMv) return {sacrificed:false, materialLost:0};
+
+  if(!g.game_over()){
+    const ranked = searchRoot(g, 2);
+    if(ranked.length) g.move(ranked[0].san);
+  }
+
+  const diffAfter = materialDiff(g, playerColor);
+  const materialLost = diffBefore - diffAfter;
+  // At least a pawn net, so a truly even trade (materialLost ~0) never
+  // counts — but a single pawn already qualifies (see FEATURESPEC.md: "a
+  // pawn sac for a strong attack" is explicitly a valid, lesser-tier case).
+  return {sacrificed: materialLost >= 1, materialLost};
+}
+
+// A pawn (or two) risked for an attack reads differently than giving up a
+// whole minor piece or more and still coming out ahead — split the display
+// label by size rather than lumping every sacrifice into one tier.
+function sacrificeTier(materialLost){
+  return materialLost >= 3 ? 'brilliant' : 'great_sacrifice';
 }
 
 function pieceName(t){
@@ -262,6 +325,7 @@ function explainLoss(preFEN, playedSan, bestSan, loss, replySan){
 if(typeof module !== 'undefined' && module.exports){
   module.exports = {
     thresholdFactorForRating, classify, tagMistake, pieceName, findThreats,
-    describeMove, explainLoss, classifyTacticalMotif, motifTagLabel, describeMotif
+    describeMove, explainLoss, classifyTacticalMotif, motifTagLabel, describeMotif,
+    materialCount, materialDiff, detectSacrifice, sacrificeTier
   };
 }

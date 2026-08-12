@@ -29,6 +29,7 @@
   --mistake:#d98a3c;
   --blunder:#d9503c;
   --brilliant:#4fb2c9;
+  --great-sac:#7fc9b2;
 }
 *{box-sizing:border-box;}
 body{
@@ -431,6 +432,7 @@ const files = ['a','b','c','d','e','f','g','h'];
    ============================================================ */
 const GRADE_META = {
   brilliant: {label:'Brilliant', color:'var(--brilliant)'},
+  great_sacrifice: {label:'Great sacrifice', color:'var(--great-sac)'},
   best:      {label:'Best move', color:'var(--best)'},
   great:     {label:'Great', color:'var(--great)'},
   good:      {label:'Good', color:'var(--good)'},
@@ -641,9 +643,25 @@ async function makePlayerMove(from, to){
 
   const deliversMate = mv.san.includes('#');
   const wasTop = bestSan && bestSan===mv.san;
-  const sacrificed = false;
+
+  // Real sacrifice detection (Layer 1.2 of FEATURESPEC.md): material really
+  // dropped, it wasn't just an ordinary trade that evens back out through a
+  // natural follow-up, AND the position is still winning/advantageous
+  // despite the deficit. That last check needs a real eval, not just the
+  // fallback minimax's material-only estimate, so a sacrifice is only ever
+  // recognized when Stockfish actually supplied evalAfter — without deep
+  // eval there's no reliable way to tell a working sacrifice from a plain
+  // blunder that happens to also involve a hanging piece, so it's left
+  // ungraded as a sacrifice (falls through to ordinary loss-based grading).
+  const sacInfo = detectSacrifice(preMoveFEN, mv.san, replySan, playerColor);
+  const evalStaysWinning = evalAfter !== null && evalAfter >= -0.5;
+  const sacrificed = sacInfo.sacrificed && evalStaysWinning;
+
   const ratingFactor = thresholdFactorForRating(profile.rating);
-  const grade = deliversMate ? 'brilliant' : classify(loss, wasTop, sacrificed, deliversMate, ratingFactor);
+  let grade = deliversMate ? 'brilliant' : classify(loss, wasTop, sacrificed, deliversMate, ratingFactor);
+  if(grade==='brilliant' && !deliversMate && sacrificed){
+    grade = sacrificeTier(sacInfo.materialLost);
+  }
 
   const bestEntry = bestSan ? {san:bestSan} : null;
   showFeedback(grade, mv.san, loss, null, bestEntry, preMoveFEN, replySan);
@@ -719,6 +737,8 @@ function showFeedback(grade, san, loss, playedEntry, bestEntry, preFEN, replySan
   }
   if(grade==='brilliant'){
     text = `A strong, non-obvious choice — ${describeMove(new Chess(preFEN), san)}. It holds up even under the opponent's best reply.`;
+  } else if(grade==='great_sacrifice'){
+    text = `A well-judged sacrifice — ${describeMove(new Chess(preFEN), san)}. You gave up material, but it doesn't come back to bite you: the position holds up even under the opponent's best reply.`;
   } else if(grade==='best'){
     text = `The top choice here: ${describeMove(new Chess(preFEN), san)}.`;
   } else if(grade==='great' || grade==='good'){
@@ -778,6 +798,7 @@ function playMoveSound(isCapture){
 function playGradeSound(grade){
   switch(grade){
     case 'brilliant': tone(660,0,0.12,'sine',0.16); tone(880,0.10,0.12,'sine',0.16); tone(1180,0.20,0.20,'sine',0.16); break;
+    case 'great_sacrifice': tone(660,0,0.12,'sine',0.15); tone(880,0.10,0.16,'sine',0.15); break;
     case 'best':      tone(620,0,0.11,'sine',0.15); tone(880,0.09,0.16,'sine',0.15); break;
     case 'great':     tone(560,0,0.10,'sine',0.13); tone(740,0.08,0.13,'sine',0.13); break;
     case 'good':      tone(520,0,0.10,'sine',0.11); break;
@@ -801,6 +822,7 @@ function buzz(pattern){
 function hapticFor(grade){
   switch(grade){
     case 'brilliant': buzz([18,40,18,40,32]); break;
+    case 'great_sacrifice': buzz([18,40,22]); break;
     case 'best':      buzz([14,50,22]); break;
     case 'great':     buzz([16]); break;
     case 'good':      buzz([10]); break;

@@ -14,7 +14,8 @@ import { Chess } from 'chess.js';
 
 const require = createRequire(import.meta.url);
 const {
-  classify, thresholdFactorForRating, tagMistake, classifyTacticalMotif, explainLoss
+  classify, thresholdFactorForRating, tagMistake, classifyTacticalMotif, explainLoss,
+  detectSacrifice, materialDiff, sacrificeTier
 } = require('../src/grading.js');
 
 describe('thresholdFactorForRating', () => {
@@ -165,5 +166,78 @@ describe('classifyTacticalMotif / tagMistake / explainLoss (Layer 1.1 wiring)', 
   it('explainLoss falls back to the older generic explanation when no reply is supplied (backward compatible)', () => {
     const explanation = explainLoss(preBlunderFen, blunderSan, null, 0.5);
     expect(explanation).not.toMatch(/fork/i);
+  });
+});
+
+// Layer 1.2: detectSacrifice() was previously a hardcoded `false` at the
+// classify() call site in makePlayerMove() — dead code. Every case below
+// double-checks the moves are actually legal on the position before
+// asserting anything: several first-draft FENs here referenced an illegal
+// move or a piece that didn't exist (e.g. "Nxc6" from a square that can't
+// reach c6, or "Qxd5" for a black queen that was never placed on the
+// board), and detectSacrifice's own defensive null-move guard silently
+// returns `sacrificed:false` for those — output that's indistinguishable
+// from a genuinely correct "not a sacrifice" result unless the move
+// legality is checked independently first.
+describe('detectSacrifice / materialDiff / sacrificeTier (Layer 1.2)', () => {
+  it('does not flag an ordinary even trade as a sacrifice', () => {
+    // Nxc6 takes a knight for a knight; dxc6 is the natural recapture.
+    const preMoveFEN = '4k3/3p4/2n5/4N3/8/8/8/4K3 w - - 0 1';
+    const check = new Chess(preMoveFEN);
+    expect(check.move('Nxc6')).toBeTruthy();
+    expect(check.move('dxc6')).toBeTruthy();
+
+    const result = detectSacrifice(preMoveFEN, 'Nxc6', 'dxc6', 'w');
+    expect(result.sacrificed).toBe(false);
+    expect(result.materialLost).toBe(0);
+  });
+
+  it('flags a clean, uncompensated minor-piece sacrifice as "brilliant" tier', () => {
+    const fen = 'r6k/8/8/8/2N5/8/8/4K3 w - - 0 1';
+    const check = new Chess(fen);
+    expect(check.move('Na5')).toBeTruthy();
+    expect(check.move('Rxa5')).toBeTruthy();
+
+    const result = detectSacrifice(fen, 'Na5', 'Rxa5', 'w');
+    expect(result.sacrificed).toBe(true);
+    expect(result.materialLost).toBe(3);
+    expect(sacrificeTier(result.materialLost)).toBe('brilliant');
+  });
+
+  it('flags a clean, uncompensated pawn sacrifice as the lesser "great_sacrifice" tier', () => {
+    const fen = 'r6k/8/8/8/8/8/P7/4K3 w - - 0 1';
+    const check = new Chess(fen);
+    expect(check.move('a4')).toBeTruthy();
+    expect(check.move('Rxa4')).toBeTruthy();
+
+    const result = detectSacrifice(fen, 'a4', 'Rxa4', 'w');
+    expect(result.sacrificed).toBe(true);
+    expect(result.materialLost).toBe(1);
+    expect(sacrificeTier(result.materialLost)).toBe('great_sacrifice');
+  });
+
+  it('does not flag a favorable combination (rook sac, queen recaptures the recapture) as a sacrifice', () => {
+    const fen = '3q3k/8/8/3n4/3R4/8/8/3QK3 w - - 0 1';
+    const check = new Chess(fen);
+    expect(check.move('Rxd5')).toBeTruthy();
+    expect(check.move('Qxd5')).toBeTruthy();
+
+    const result = detectSacrifice(fen, 'Rxd5', 'Qxd5', 'w');
+    expect(result.sacrificed).toBe(false);
+    // Strongly favorable for white once the follow-up recapture is found
+    // (+3 knight, -5 rook, +9 queen = +7 net), not merely break-even.
+    expect(result.materialLost).toBeLessThan(0);
+  });
+
+  it('returns sacrificed:false without throwing when no reply is supplied', () => {
+    const fen = 'r6k/8/8/8/2N5/8/8/4K3 w - - 0 1';
+    const result = detectSacrifice(fen, 'Na5', null, 'w');
+    expect(result).toEqual({sacrificed:false, materialLost:0});
+  });
+
+  it('materialDiff nets out both sides rather than counting one side in isolation', () => {
+    const g = new Chess(); // starting position: perfectly balanced
+    expect(materialDiff(g, 'w')).toBe(0);
+    expect(materialDiff(g, 'b')).toBe(0);
   });
 });
