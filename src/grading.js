@@ -327,6 +327,18 @@ function explainLoss(preFEN, playedSan, bestSan, loss, replySan){
     const bestAvailable = availableCaptures.sort((a,b)=>VALUES[b.captured]-VALUES[a.captured])[0];
     if(bestAvailable && VALUES[bestAvailable.captured]>=3 && bestAvailable.san!==playedSan){
       why = `It passes up material that was on offer — the ${pieceName(bestAvailable.captured)} was available to take.`;
+    } else if(loss >= 1.0){
+      // A loss this large (roughly a piece or more) with no capture, check,
+      // or named tactical motif found isn't a subtle positional concession
+      // — calling it that undersells a real mistake and reads as generic
+      // engine-speak. Say what's actually true instead of guessing at a
+      // mechanism this analysis didn't find: the score dropped sharply, but
+      // the shallow search behind this explanation (see the !engineReady
+      // check below) couldn't pin down why.
+      why = `This gives up real value here, even though no single clean tactic explains it from this analysis — likely a combination of factors (weakened structure, lost coordination, or a deeper idea) rather than one clean shot.`;
+      if(typeof engineReady !== 'undefined' && !engineReady){
+        why += ` The coach is running on its basic fallback search right now (Stockfish isn't loaded) — a sharper explanation should be available once that's working.`;
+      }
     } else {
       why = `It concedes ground positionally: the piece ends up less active, and the opponent gets a free hand to improve.`;
     }

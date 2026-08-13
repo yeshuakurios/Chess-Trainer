@@ -8,7 +8,7 @@
 // intent ("beginners aren't blundered for normal noise", HANDOFF.md). Fixed
 // by dividing instead of multiplying. The "grading direction" describe
 // block below exists specifically to guard against that inversion recurring.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { createRequire } from 'module';
 import { Chess } from 'chess.js';
 
@@ -166,6 +166,44 @@ describe('classifyTacticalMotif / tagMistake / explainLoss (Layer 1.1 wiring)', 
   it('explainLoss falls back to the older generic explanation when no reply is supplied (backward compatible)', () => {
     const explanation = explainLoss(preBlunderFen, blunderSan, null, 0.5);
     expect(explanation).not.toMatch(/fork/i);
+  });
+});
+
+// Regression test for a live bug report: a "Mistake"/"Blunder"-tier loss
+// with no capture, check, or named motif found was described as "concedes
+// ground positionally" — soft, hedging language that actively undersells a
+// real loss and reads as generic engine-speak. explainLoss should scale its
+// honesty with the actual size of the loss instead of using one flat
+// sentence regardless of severity.
+describe('explainLoss severity-aware fallback wording (live bug: "generic" feedback)', () => {
+  const preBlunderFen = '3q2k1/r6p/8/8/1N6/8/8/4K3 b - - 0 1';
+  const blunderSan = 'h6'; // quiet move, no capture/check available in reply, no motif without a replySan
+
+  afterEach(() => {
+    delete global.engineReady;
+  });
+
+  it('uses the old soft wording for a genuinely small loss', () => {
+    const explanation = explainLoss(preBlunderFen, blunderSan, null, 0.2);
+    expect(explanation).toMatch(/concedes ground positionally/i);
+  });
+
+  it('does NOT use the soft "concedes ground positionally" wording for a large (mistake/blunder-tier) loss', () => {
+    const explanation = explainLoss(preBlunderFen, blunderSan, null, 1.5);
+    expect(explanation).not.toMatch(/concedes ground positionally/i);
+    expect(explanation).toMatch(/gives up real value/i);
+  });
+
+  it('mentions the fallback-engine caveat when Stockfish is not ready', () => {
+    global.engineReady = false;
+    const explanation = explainLoss(preBlunderFen, blunderSan, null, 1.5);
+    expect(explanation).toMatch(/basic fallback search/i);
+  });
+
+  it('omits the fallback-engine caveat when Stockfish is ready', () => {
+    global.engineReady = true;
+    const explanation = explainLoss(preBlunderFen, blunderSan, null, 1.5);
+    expect(explanation).not.toMatch(/basic fallback search/i);
   });
 });
 
