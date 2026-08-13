@@ -142,6 +142,27 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
 }
 .coach-chat-input-row button:disabled{opacity:.5;cursor:default;}
 
+.modal-overlay{
+  display:none;position:fixed;inset:0;background:rgba(8,12,16,.72);
+  z-index:50;align-items:center;justify-content:center;padding:20px;
+}
+.modal-overlay.show{display:flex;}
+.modal-card{
+  background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:18px;max-width:420px;width:100%;
+}
+.modal-card h3{margin:0 0 8px;font-size:16px;}
+.modal-card .feedback-text{margin-bottom:14px;}
+.modal-card code{color:var(--gold);font-size:12px;}
+.modal-label{display:block;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;}
+.modal-card input{
+  width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+  color:var(--text);padding:10px;font-size:14px;margin-bottom:14px;
+}
+.modal-btn-row{display:flex;gap:8px;}
+.modal-btn-row .btn{flex:1;background:transparent;border:1px solid var(--line);color:var(--dim);padding:11px;border-radius:7px;font-size:13px;cursor:pointer;}
+.modal-btn-row .big-btn{flex:1;width:auto;}
+
 .history{font-family:'Courier New',monospace;font-size:11.5px;color:var(--dim);line-height:1.8;margin-bottom:12px;}
 .history b{color:var(--text);}
 .controls{display:flex;gap:8px;}
@@ -336,6 +357,21 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
       <div class="feedback-text" id="drillFeedback" style="margin-top:10px;"></div>
     </div>
     <button class="big-btn secondary" id="btnNextDrill">Next drill</button>
+  </div>
+</div>
+
+<div class="modal-overlay" id="coachSetupOverlay">
+  <div class="modal-card">
+    <h3>Set up LLM coach</h3>
+    <p class="feedback-text">Paste in the worker URL and app token from deploying <code>worker/second-board-coach/</code>.</p>
+    <label class="modal-label" for="coachSetupEndpoint">Worker URL</label>
+    <input type="url" id="coachSetupEndpoint" placeholder="https://your-worker.workers.dev" autocapitalize="off" autocorrect="off">
+    <label class="modal-label" for="coachSetupToken">App token</label>
+    <input type="text" id="coachSetupToken" placeholder="the APP_TOKEN secret you set" autocapitalize="off" autocorrect="off">
+    <div class="modal-btn-row">
+      <button class="btn" id="btnCoachSetupCancel">Cancel</button>
+      <button class="big-btn" id="btnCoachSetupSave">Save &amp; enable</button>
+    </div>
   </div>
 </div>
 
@@ -1787,14 +1823,17 @@ function refreshLLMCoachToggle(){
   tLLMCoach.textContent = llmCoachEnabled ? 'Coach: on' : 'Coach: off';
 }
 
+// Two chained window.prompt() calls (worker URL, then app token) used to
+// live here, but iOS Safari silently suppresses a second synchronous
+// dialog fired right after the first one resolves in the same tap — the
+// app-token prompt just never appeared, with no error visible anywhere.
+// A single in-page modal with both fields avoids relying on native
+// dialogs at all.
 tLLMCoach.addEventListener('click', ()=>{
   if(!llmCoachEnabled){
     if(!isLLMCoachConfigured()){
-      const endpoint = prompt('LLM coach worker URL (from deploying worker/second-board-coach/):');
-      if(!endpoint) return;
-      const appToken = prompt('App token (the APP_TOKEN secret you set on that worker):');
-      if(!appToken) return;
-      setLLMCoachConfig(endpoint.trim(), appToken.trim());
+      openCoachSetupModal();
+      return; // modal's Save button finishes enabling it
     }
     llmCoachEnabled = true;
   } else {
@@ -1804,6 +1843,26 @@ tLLMCoach.addEventListener('click', ()=>{
   resetCoachChat();
 });
 refreshLLMCoachToggle();
+
+function openCoachSetupModal(){
+  document.getElementById('coachSetupEndpoint').value = '';
+  document.getElementById('coachSetupToken').value = '';
+  document.getElementById('coachSetupOverlay').classList.add('show');
+}
+function closeCoachSetupModal(){
+  document.getElementById('coachSetupOverlay').classList.remove('show');
+}
+document.getElementById('btnCoachSetupCancel').addEventListener('click', closeCoachSetupModal);
+document.getElementById('btnCoachSetupSave').addEventListener('click', ()=>{
+  const endpoint = document.getElementById('coachSetupEndpoint').value.trim();
+  const appToken = document.getElementById('coachSetupToken').value.trim();
+  if(!endpoint || !appToken) return; // leave the modal open until both are filled in
+  setLLMCoachConfig(endpoint, appToken);
+  closeCoachSetupModal();
+  llmCoachEnabled = true;
+  refreshLLMCoachToggle();
+  resetCoachChat();
+});
 
 /* ============================================================
    LLM COACH CHAT — follow-up Q&A about the current mistake
