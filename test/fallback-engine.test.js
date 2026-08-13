@@ -29,11 +29,16 @@ const require = createRequire(import.meta.url);
 const { Chess } = require('chess.js');
 const { pickEngineMove, engineParamsForElo, searchRoot, positionComplexity, evaluatePositional, evaluate, MATE_SCORE } = require('../src/fallback-engine.js');
 
-// 4x the slowest fbDepth<=2 measurement seen on this host (~1.6s) — enough
-// headroom to absorb this sandbox's observed run-to-run CPU variance without
-// weakening what the budget actually guards against (fbDepth 4+ territory,
-// which is 50-100x slower still, not a close call either way).
-const FAST_BUDGET_MS = 4000;
+// Was 4000 (4x the slowest fbDepth<=2 measurement then, ~1.6s) before this
+// file's quiescence extension (see src/fallback-engine.js) added real,
+// legitimate cost to every fbDepth<=2 search: measured up to ~4.5s on this
+// host for the open-middlegame/elo1500 case with quiescence enabled, which
+// already exceeded the old budget outright, before even accounting for
+// this sandbox's documented run-to-run CPU variance. Widened with the same
+// headroom philosophy as before — comfortably above the slowest measured
+// case, still nowhere near fbDepth 4+ territory (50-100x slower still, not
+// a close call either way).
+const FAST_BUDGET_MS = 8000;
 // Not aspirational — a ceiling well below the 90-150s+ the original
 // depth/fbDepth collision bug produced at depth 4 on this host, so a
 // regression back toward that is still caught even in the one case that
@@ -217,6 +222,22 @@ describe('evaluatePositional (src/fallback-engine.js)', () => {
     expect(ranked[0].san).not.toBe('Rb8');
   });
 
+  it('does not credit a "won" pawn that the opponent can immediately recapture (quiescence)', () => {
+    // Second live bug report: nearly every quiet White developing move
+    // scored ~1 pawn worse than a check, purely because the search saw
+    // Black's Nxe4 as a clean pawn win without noticing White's own knight
+    // on c3 already guards e4. This is the exact reported position:
+    // 1.e4 d6 2.Nf3 e5 3.Nc3 Nf6, White to move.
+    const g = new Chess();
+    ['e4','d6','Nf3','e5','Nc3','Nf6'].forEach(m=>g.move(m));
+    const ranked = searchRoot(g, 2, evaluatePositional);
+    const be2 = ranked.find(r => r.san === 'Be2').score;
+    // Before the quiescence fix this was ~-0.99 (mistaking Nxe4 for a free
+    // pawn); a genuinely quiet, roughly-even developing move should stay
+    // close to 0 once the search can see the recapture.
+    expect(Math.abs(be2)).toBeLessThan(0.3);
+  });
+
   it('skews simulated blunders toward mild slips rather than uniform across the whole worse half', () => {
     // Reported live: the opponent bot dropped a whole minor piece for a
     // single pawn (bishop takes a defended pawn, immediately recaptured)
@@ -238,7 +259,7 @@ describe('evaluatePositional (src/fallback-engine.js)', () => {
     // single worst move had a roughly 1/(0.7*length) chance each blunder
     // roll; the skewed version should land there distinctly less often.
     expect(worstPickCount / trials).toBeLessThan(0.15);
-  });
+  }, 30000); // 300 trials x 2 searches/trial now include quiescence; ~8s measured, generous margin for host variance
 
   it('pickEngineMove no longer gets stuck oscillating a rook when material is tied', () => {
     // Elo 1200 (fbDepth 2, blunderChance ~19%) — fast enough for several

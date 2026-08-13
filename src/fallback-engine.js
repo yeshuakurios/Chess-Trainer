@@ -2,9 +2,12 @@
    FALLBACK MINIMAX ENGINE
    ------------------------------------------------------------
    Brute-force alpha-beta search used when Stockfish fails to
-   initialize. No move ordering, no quiescence search, no
-   transposition table — depth MUST stay clamped to ~3 plies or
-   this can hang the browser tab (see HANDOFF.md Known Issue #2).
+   initialize. No move ordering, no transposition table — depth
+   MUST stay clamped to ~3 plies or this can hang the browser tab
+   (see HANDOFF.md Known Issue #2). Leaf nodes DO get a bounded
+   captures-only quiescence extension (see quiescence() below) —
+   added after a live bug report where the plain fixed-depth search
+   misjudged defended pieces as free captures at the search horizon.
 
    Loaded via <script src="src/fallback-engine.js"> in the browser
    (classic script — declarations land in the shared page scope,
@@ -159,15 +162,101 @@ function evaluatePositional(g){
   return base + bonus;
 }
 
-function minimax(g, depth, alpha, beta, maximizing, evalFn){
+// Bounded quiescence search: at a leaf node, instead of evaluating the
+// position as-is, keep searching ONLY capturing moves until none are left
+// (or the depth cap below is hit) before evaluating. This is a real,
+// reported live bug fix: without it, a leaf that ends right after "Black
+// wins a pawn" gets scored as a clean pawn win even when that piece is
+// defended and White would just recapture next move — the plain minimax
+// simply never looks that one move further. Confirmed directly: nearly
+// every quiet White developing move in one reported position scored ~1
+// pawn worse than a check, purely because the search couldn't see that a
+// knight guarding the "won" pawn would recapture it — which in turn made
+// genuinely fine moves (Be2, Bd3) and genuinely pointless ones (Rg1, a
+// wandering king walk) score almost identically, since they were all
+// equally victims of the same illusion.
+//
+// Capped depth, and ONLY explores captures (a much narrower branching
+// factor than the full move list) — this is deliberately conservative
+// given this file's history of real depth-related hangs (see the module
+// header and HANDOFF.md Known Issue #2). Measured cost is added at every
+// leaf of the main search, so this needs to stay cheap; see
+// test/fallback-engine.test.js for the timing budgets this is held to.
+//
+// Only enabled at depth 1-2 (see qPliesForDepth below) — depth 3 was
+// ALREADY the documented "known slow" case (single-digit seconds, already
+// over budget) before quiescence existed at all; measured directly during
+// development of this fix, even a single extra quiescence ply at depth 3
+// on a branchy middlegame didn't finish in 30s. Depth 3 keeps its exact
+// pre-quiescence behavior (evaluate immediately at the horizon) rather
+// than risk compounding an already-marginal case.
+//
+// 2 plies is deliberately the minimum that still resolves the reported
+// bug (one capture + the recapture that refutes it) rather than the more
+// generous depth tried during development: measured on the same branchy
+// middlegame benchmark used throughout this file's tests, 6 plies costs
+// ~3.3s at depth 2 (uncomfortably close to the 4s budget given this
+// project's documented host-to-host CPU variance), while 2 plies costs
+// ~2.2s for the identical correctness result on the reported position —
+// a real margin of safety for the same fix.
+const QUIESCENCE_MAX_PLIES = 2;
+
+function qPliesForDepth(depth){
+  return depth >= 3 ? 0 : QUIESCENCE_MAX_PLIES;
+}
+
+function quiescence(g, alpha, beta, maximizing, evalFn, qDepth, restrictToSquare){
+  const standPat = evalFn(g);
+  if(qDepth<=0 || g.game_over()) return standPat;
+
+  if(maximizing){
+    if(standPat >= beta) return beta;
+    if(standPat > alpha) alpha = standPat;
+  } else {
+    if(standPat <= alpha) return alpha;
+    if(standPat < beta) beta = standPat;
+  }
+
+  // The first quiescence ply (called right at the fixed-depth horizon) scans
+  // every capture, to discover whether one is even available. Every ply
+  // after that is restricted to recaptures on that SAME square — resolving
+  // the one exchange that's actually in progress, not opening new fronts
+  // elsewhere on the board. Without this restriction, branching stays as
+  // wide as a full-width search (just captures-only), which is still wide
+  // enough to blow the time budget on a branchy middlegame — measured
+  // timing out entirely at >90s during development of this fix. Restricted
+  // to same-square recaptures, a single exchange is naturally bounded by
+  // however many pieces attack/defend that one square (rarely more than a
+  // handful), which is what actually keeps this cheap.
+  let captures = g.moves({verbose:true}).filter(m=>m.captured);
+  if(restrictToSquare) captures = captures.filter(m=>m.to===restrictToSquare);
+
+  for(const m of captures){
+    g.move(m.san);
+    const score = quiescence(g, alpha, beta, !maximizing, evalFn, qDepth-1, m.to);
+    g.undo();
+    if(maximizing){
+      if(score > alpha) alpha = score;
+      if(alpha >= beta) break;
+    } else {
+      if(score < beta) beta = score;
+      if(beta <= alpha) break;
+    }
+  }
+  return maximizing ? alpha : beta;
+}
+
+function minimax(g, depth, alpha, beta, maximizing, evalFn, qPlies){
   const ef = evalFn || evaluate;
-  if(depth===0 || g.game_over()) return ef(g);
+  const qp = qPlies===undefined ? qPliesForDepth(depth) : qPlies;
+  if(g.game_over()) return ef(g);
+  if(depth===0) return quiescence(g, alpha, beta, maximizing, ef, qp, undefined);
   const moves = g.moves();
   if(maximizing){
     let maxEval = -Infinity;
     for(const m of moves){
       g.move(m);
-      const ev = minimax(g, depth-1, alpha, beta, false, ef);
+      const ev = minimax(g, depth-1, alpha, beta, false, ef, qp);
       g.undo();
       maxEval = Math.max(maxEval, ev);
       alpha = Math.max(alpha, ev);
@@ -178,7 +267,7 @@ function minimax(g, depth, alpha, beta, maximizing, evalFn){
     let minEval = Infinity;
     for(const m of moves){
       g.move(m);
-      const ev = minimax(g, depth-1, alpha, beta, true, ef);
+      const ev = minimax(g, depth-1, alpha, beta, true, ef, qp);
       g.undo();
       minEval = Math.min(minEval, ev);
       beta = Math.min(beta, ev);
@@ -193,11 +282,19 @@ function minimax(g, depth, alpha, beta, maximizing, evalFn){
 // material evaluate() — pass evaluatePositional explicitly (as
 // pickEngineMove does) to rank by material+PST instead.
 function searchRoot(g, depth, evalFn){
+  // Compute the quiescence budget from THIS depth (the true, original
+  // search depth the caller asked for) and pass it explicitly into every
+  // minimax call — minimax's own default falls back to qPliesForDepth of
+  // whatever depth IT was called with, which is already depth-1 by the
+  // time it sees it here, and would silently enable quiescence for
+  // nominally-depth-3 searches (exactly the case proven too slow to
+  // support during development of this fix) if left to infer it itself.
+  const qPlies = qPliesForDepth(depth);
   const moves = g.moves({verbose:true});
   const ranked = [];
   for(const m of moves){
     g.move(m.san);
-    const score = minimax(g, depth-1, -Infinity, Infinity, g.turn()==='w', evalFn);
+    const score = minimax(g, depth-1, -Infinity, Infinity, g.turn()==='w', evalFn, qPlies);
     g.undo();
     ranked.push({san:m.san, from:m.from, to:m.to, flags:m.flags, captured:m.captured, score});
   }
@@ -280,5 +377,5 @@ function pickEngineMove(g, elo){
 // Node/Vitest can require() this file directly; the browser (classic
 // <script> tag, no `module` global) just skips this block.
 if(typeof module !== 'undefined' && module.exports){
-  module.exports = { VALUES, MATE_SCORE, evaluate, evaluatePositional, minimax, searchRoot, engineParamsForElo, pickEngineMove, positionComplexity };
+  module.exports = { VALUES, MATE_SCORE, evaluate, evaluatePositional, quiescence, minimax, searchRoot, engineParamsForElo, pickEngineMove, positionComplexity };
 }
