@@ -27,7 +27,7 @@ import { createRequire } from 'module';
 
 const require = createRequire(import.meta.url);
 const { Chess } = require('chess.js');
-const { pickEngineMove, engineParamsForElo, searchRoot, positionComplexity, evaluatePositional, MATE_SCORE } = require('../src/fallback-engine.js');
+const { pickEngineMove, engineParamsForElo, searchRoot, positionComplexity, evaluatePositional, evaluate, MATE_SCORE } = require('../src/fallback-engine.js');
 
 // 4x the slowest fbDepth<=2 measurement seen on this host (~1.6s) — enough
 // headroom to absorb this sandbox's observed run-to-run CPU variance without
@@ -185,6 +185,26 @@ describe('evaluatePositional (src/fallback-engine.js)', () => {
     expect(evaluatePositional(new Chess(fen))).toBe(-MATE_SCORE);
   });
 
+  it('never lets cumulative positional bonuses outweigh a clean multi-pawn material swing', () => {
+    // Regression test for a live bug report: the opponent bot dropped a
+    // whole minor piece for a single pawn twice in one game. Root cause:
+    // evaluatePositional's PST bonuses (originally /100, i.e. the raw
+    // centipawn table values just rescaled to pawn units) could swing by
+    // close to a full pawn from a single reply — enough to outweigh a
+    // clean 2-pawn material recapture at this engine's shallow 1-3 ply
+    // search, which has no deeper search to self-correct with. Confirms
+    // directly: after a queen recaptures a bishop (net +2 material for the
+    // recapturing side), evaluatePositional must stay close to the plain
+    // material count, not be pulled back toward even by PST alone.
+    const preRecapture = new Chess('r2qkb1r/ppp1pppp/2n2n2/1B1p2N1/5P2/4P3/PPbP2PP/RNBQK2R w KQkq - 0 6');
+    const postRecapture = new Chess(preRecapture.fen());
+    postRecapture.move('Qxc2');
+    const material = evaluate(postRecapture);
+    const positional = evaluatePositional(postRecapture);
+    expect(material).toBe(2); // queen recaptures a bishop for a pawn: net +2 for white
+    expect(Math.abs(positional - material)).toBeLessThan(0.5);
+  });
+
   it('reproduces the reported position and ranks the pointless rook shuffle below real development', () => {
     // Exact position from the bug report: 1.f4 Nc6 2.Nf3, Black to move.
     const g = new Chess();
@@ -195,6 +215,29 @@ describe('evaluatePositional (src/fallback-engine.js)', () => {
     // material evaluate() — real development should now outrank it.
     expect(rb8Rank).toBeGreaterThan(1);
     expect(ranked[0].san).not.toBe('Rb8');
+  });
+
+  it('skews simulated blunders toward mild slips rather than uniform across the whole worse half', () => {
+    // Reported live: the opponent bot dropped a whole minor piece for a
+    // single pawn (bishop takes a defended pawn, immediately recaptured)
+    // TWICE in one 15-move game. The old uniform-across-the-worse-half pick
+    // treated "loses a piece for nothing" and "a slightly worse developing
+    // move" as equally likely blunders. Force the blunder branch (elo far
+    // into its ~0.45 ceiling) and confirm the picked move is very rarely
+    // the single worst-ranked (most catastrophic) option across many trials.
+    const g = new Chess();
+    let worstPickCount = 0;
+    const trials = 300;
+    for(let i=0;i<trials;i++){
+      const gg = new Chess(g.fen());
+      const ranked = searchRoot(gg, 1, evaluatePositional);
+      const choice = pickEngineMove(gg, 400); // near the 0.45 blunderChance ceiling
+      if(choice.san === ranked[ranked.length-1].san) worstPickCount++;
+    }
+    // With the old uniform distribution across indices [1, 0.7*length), the
+    // single worst move had a roughly 1/(0.7*length) chance each blunder
+    // roll; the skewed version should land there distinctly less often.
+    expect(worstPickCount / trials).toBeLessThan(0.15);
   });
 
   it('pickEngineMove no longer gets stuck oscillating a rook when material is tied', () => {

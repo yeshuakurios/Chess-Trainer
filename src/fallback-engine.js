@@ -122,6 +122,26 @@ const PST = {
 // exactly why the fallback bot was observed shuffling a rook back and forth
 // (Rb8/Ra8/Rb8) instead of developing: every alternative looked exactly as
 // good as that shuffle.
+//
+// PST_SCALE divides the standard centipawn table values down before adding
+// them to material. This was originally /100 (i.e. the raw centipawn table
+// values, just rescaled to pawn units) — a real, reported live bug: at that
+// scale the summed positional bonus across the board can swing by close to
+// a full pawn from a single reply, which is large enough to outweigh actual
+// material at this engine's shallow 1-3 ply search depth. Concretely: after
+// a queen recaptures a bishop (a clean +2 pawn material swing), the
+// positional term alone moved the total eval by -0.9, enough that the
+// search ranked "hang a bishop for a pawn" as Black's single best move,
+// ahead of every quiet developing alternative. A deep search would
+// self-correct this by finding a further refutation; this engine doesn't
+// go deep enough for that, so the static eval itself has to keep material
+// dominant. /1000 keeps the cumulative positional swing small enough
+// (empirically under ~0.1 pawns per ply even in this exact position) to
+// never approach the smallest real material difference (one pawn), while
+// still being consistent enough to break ties between otherwise
+// materially-equal quiet moves — which is all it was ever needed for.
+const PST_SCALE = 1000;
+
 function evaluatePositional(g){
   const base = evaluate(g);
   if(Math.abs(base) >= MATE_SCORE) return base; // terminal position, PST is meaningless
@@ -133,7 +153,7 @@ function evaluatePositional(g){
     const table = PST[pc.type];
     if(!table) continue;
     const idx = pc.color==='w' ? r*8+f : (7-r)*8+f;
-    const v = table[idx]/100; // centipawns -> pawn units, matching VALUES scale
+    const v = table[idx]/PST_SCALE; // centipawns -> pawn units, heavily damped (see PST_SCALE)
     bonus += pc.color==='w' ? v : -v;
   }
   return base + bonus;
@@ -240,8 +260,18 @@ function pickEngineMove(g, elo){
   const ranked = searchRoot(g, safeDepth, evaluatePositional);
   if(ranked.length===0) return null;
   if(Math.random() < blunderChance && ranked.length>1){
-    // pick a suboptimal move to simulate a weaker player, biased toward the worse half
-    const idx = Math.min(ranked.length-1, Math.floor(Math.random()*ranked.length*0.7)+1);
+    // Pick a suboptimal move to simulate a weaker player — but skewed
+    // toward MILD slips rather than uniform across the whole worse half.
+    // The old uniform pick treated "loses a whole piece for nothing" and
+    // "a slightly less accurate developing move" as equally likely outcomes
+    // of the same dice roll, which doesn't match how real human errors are
+    // distributed: most mistakes are small, and dropping a full piece for
+    // free is comparatively rare even for a ~1200-1250 player. The product
+    // of two independent uniform draws is heavily weighted toward 0 (PDF
+    // -ln(x)), so most rolls land just past the best move and only
+    // occasionally reach deep into the ranked list.
+    const skew = Math.random() * Math.random();
+    const idx = Math.min(ranked.length-1, Math.floor(skew*ranked.length*0.7)+1);
     return ranked[idx];
   }
   return ranked[0];
