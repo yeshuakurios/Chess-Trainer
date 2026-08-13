@@ -159,6 +159,8 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
   width:100%;background:var(--panel2);border:1px solid var(--line);border-radius:7px;
   color:var(--text);padding:10px;font-size:14px;margin-bottom:14px;
 }
+.modal-card input.field-error{border-color:var(--blunder);}
+.modal-error{color:var(--blunder);font-size:12.5px;margin:-6px 0 12px;}
 .modal-btn-row{display:flex;gap:8px;}
 .modal-btn-row .btn{flex:1;background:transparent;border:1px solid var(--line);color:var(--dim);padding:11px;border-radius:7px;font-size:13px;cursor:pointer;}
 .modal-btn-row .big-btn{flex:1;width:auto;}
@@ -368,6 +370,7 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
     <input type="url" id="coachSetupEndpoint" placeholder="https://your-worker.workers.dev" autocapitalize="off" autocorrect="off">
     <label class="modal-label" for="coachSetupToken">App token</label>
     <input type="text" id="coachSetupToken" placeholder="the APP_TOKEN secret you set" autocapitalize="off" autocorrect="off">
+    <div class="modal-error" id="coachSetupError" style="display:none;"></div>
     <div class="modal-btn-row">
       <button class="btn" id="btnCoachSetupCancel">Cancel</button>
       <button class="big-btn" id="btnCoachSetupSave">Save &amp; enable</button>
@@ -1847,16 +1850,42 @@ refreshLLMCoachToggle();
 function openCoachSetupModal(){
   document.getElementById('coachSetupEndpoint').value = '';
   document.getElementById('coachSetupToken').value = '';
+  hideCoachSetupError();
   document.getElementById('coachSetupOverlay').classList.add('show');
 }
 function closeCoachSetupModal(){
   document.getElementById('coachSetupOverlay').classList.remove('show');
 }
+function hideCoachSetupError(){
+  document.getElementById('coachSetupError').style.display = 'none';
+  document.getElementById('coachSetupEndpoint').classList.remove('field-error');
+  document.getElementById('coachSetupToken').classList.remove('field-error');
+}
+function showCoachSetupError(message, ...emptyFieldIds){
+  const err = document.getElementById('coachSetupError');
+  err.textContent = message;
+  err.style.display = 'block';
+  document.getElementById('coachSetupEndpoint').classList.remove('field-error');
+  document.getElementById('coachSetupToken').classList.remove('field-error');
+  for(const id of emptyFieldIds) document.getElementById(id).classList.add('field-error');
+}
 document.getElementById('btnCoachSetupCancel').addEventListener('click', closeCoachSetupModal);
 document.getElementById('btnCoachSetupSave').addEventListener('click', ()=>{
   const endpoint = document.getElementById('coachSetupEndpoint').value.trim();
   const appToken = document.getElementById('coachSetupToken').value.trim();
-  if(!endpoint || !appToken) return; // leave the modal open until both are filled in
+  if(!endpoint && !appToken){
+    showCoachSetupError('Both fields are required.', 'coachSetupEndpoint', 'coachSetupToken');
+    return;
+  }
+  if(!endpoint){
+    showCoachSetupError('Worker URL is required.', 'coachSetupEndpoint');
+    return;
+  }
+  if(!appToken){
+    showCoachSetupError('App token is required.', 'coachSetupToken');
+    return;
+  }
+  hideCoachSetupError();
   setLLMCoachConfig(endpoint, appToken);
   closeCoachSetupModal();
   llmCoachEnabled = true;
