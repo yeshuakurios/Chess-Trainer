@@ -1,0 +1,14 @@
+name = "second-board-coach"
+main = "index.js"
+compatibility_date = "2025-01-01"
+
+# Secrets (set these with `wrangler secret put <NAME>` — never put real
+# values in this file, and never commit real values anywhere):
+#   ANTHROPIC_API_KEY   from console.anthropic.com
+#   APP_TOKEN            any random string you choose (e.g. `openssl rand -hex 24`)
+#
+# Optional plain (non-secret) vars, uncomment to override the defaults
+# baked into index.js:
+# [vars]
+# EXPLAIN_MODEL = "claude-haiku-4-5-20251001"
+# CHAT_MODEL = "claude-sonnet-5"

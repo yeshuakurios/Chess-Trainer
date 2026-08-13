@@ -12,6 +12,7 @@
 <script src="src/grading.js"></script>
 <script src="src/insights.js"></script>
 <script src="src/opening-explorer.js"></script>
+<script src="src/llm-coach.js"></script>
 <style>
 :root{
   --ink:#0f1620;
@@ -120,6 +121,27 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
 .grade-move{font-family:'Courier New',monospace;font-size:15px;color:var(--text);}
 .feedback-text{font-size:13.5px;color:var(--dim);line-height:1.5;}
 
+.coach-chat-toggle{
+  display:block;margin-top:10px;background:transparent;border:none;color:var(--gold);
+  font-size:12px;cursor:pointer;padding:0;font-weight:600;
+}
+.coach-chat{margin-top:10px;border-top:1px solid var(--line);padding-top:10px;}
+.coach-chat-log{max-height:220px;overflow-y:auto;margin-bottom:8px;display:flex;flex-direction:column;gap:8px;}
+.coach-chat-msg{font-size:13px;line-height:1.45;padding:8px 10px;border-radius:8px;max-width:90%;}
+.coach-chat-msg.user{align-self:flex-end;background:#2a2210;color:var(--text);}
+.coach-chat-msg.assistant{align-self:flex-start;background:var(--panel2);color:var(--text);}
+.coach-chat-msg.pending{color:var(--dim);font-style:italic;}
+.coach-chat-input-row{display:flex;gap:6px;}
+.coach-chat-input-row input{
+  flex:1;background:var(--panel2);border:1px solid var(--line);border-radius:7px;
+  color:var(--text);padding:8px 10px;font-size:13px;
+}
+.coach-chat-input-row button{
+  background:var(--gold);color:#241a05;border:none;border-radius:7px;
+  padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;
+}
+.coach-chat-input-row button:disabled{opacity:.5;cursor:default;}
+
 .history{font-family:'Courier New',monospace;font-size:11.5px;color:var(--dim);line-height:1.8;margin-bottom:12px;}
 .history b{color:var(--text);}
 .controls{display:flex;gap:8px;}
@@ -186,6 +208,7 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
       <button class="toggle on" id="toggleSound">Sound on</button>
       <button class="toggle on" id="toggleHaptics">Haptics on</button>
       <span class="toggle" id="engineStatus" style="cursor:default;">Engine loading…</span>
+      <button class="toggle" id="toggleLLMCoach">Coach: off</button>
     </div>
   </header>
 
@@ -220,6 +243,14 @@ nav.tabs button.active{background:var(--gold);color:#241a05;}
           <span class="grade-move" id="gradeMove"></span>
         </div>
         <div class="feedback-text" id="gradeText"></div>
+        <button class="coach-chat-toggle" id="btnAskCoach" style="display:none;">Ask the coach a follow-up &rsaquo;</button>
+        <div class="coach-chat" id="coachChat" style="display:none;">
+          <div class="coach-chat-log" id="coachChatLog"></div>
+          <div class="coach-chat-input-row">
+            <input type="text" id="coachChatInput" placeholder="Ask about this position…" maxlength="300">
+            <button id="btnSendCoachChat">Send</button>
+          </div>
+        </div>
       </div>
 
       <div class="result-card" id="resultCard">
@@ -527,6 +558,14 @@ let sessionMoves = [];
 let sessionMovesGraded = 0;
 let gameOpponentElo = null; // elo used for THIS game
 let diagnosticMode = false;
+// LLM coach chat: the position/move context the chat is currently scoped
+// to (null when the last move wasn't graded inaccuracy/mistake/blunder —
+// there's nothing to ask follow-ups about), and the running conversation
+// for that one context. Both reset on every new graded mistake and on
+// starting a new game — this is a per-position Q&A, not a persistent
+// full-game conversation.
+let currentFeedbackContext = null;
+let coachChatHistory = [];
 
 function renderBoardTo(elId, g, interactive){
   const el = document.getElementById(elId);
@@ -718,6 +757,18 @@ async function makePlayerMove(from, to){
     saveMistakeForRecycling(preMoveFEN, mv.san, bestSan, loss, replySan, complexity);
   }
 
+  if(grade==='inaccuracy' || grade==='mistake' || grade==='blunder'){
+    currentFeedbackContext = {
+      fen: preMoveFEN, playedSan: mv.san, bestSan, loss, grade,
+      motifTag: mistakeTag, replySan, playerRating: profile.rating,
+    };
+    resetCoachChat();
+    enhanceFeedbackWithLLM(mv, grade, loss, preMoveFEN, bestSan, mistakeTag, replySan, game.history().length);
+  } else {
+    currentFeedbackContext = null;
+    resetCoachChat();
+  }
+
   sessionCpLossTotal += loss;
   sessionMovesGraded += 1;
   sessionMoves.push({
@@ -806,6 +857,30 @@ function showOpeningFeedback(mv, loss, plyIndex, note){
 }
 
 // pieceName, findThreats, describeMove, explainLoss moved to src/grading.js
+
+// Optional LLM-coach enhancement (see src/llm-coach.js + worker/second-board-coach/):
+// swaps the templated explainLoss() text for a richer, non-templated
+// explanation once the (user-deployed) worker responds. Same async-upgrade,
+// staleness-guarded pattern as showOpeningFeedback above — this is a genuine
+// network round trip to a service that may not even be configured, so it
+// must never block or interfere with the synchronous grading/feedback flow
+// that already ran by the time this resolves. Can race with
+// showOpeningFeedback for an early mistake; whichever resolves later simply
+// wins (both write to the same element under the same staleness guard), and
+// since the LLM call carries strictly more context, that's an acceptable
+// outcome rather than a bug worth coordinating around.
+async function enhanceFeedbackWithLLM(mv, grade, loss, preMoveFEN, bestSan, motifTag, replySan, plyIndex){
+  if(!llmCoachEnabled) return;
+  const explanation = await explainMoveWithLLM({
+    fen: preMoveFEN, playedSan: mv.san, bestSan, loss, grade,
+    motifTag, replySan, playerRating: profile.rating,
+  });
+  if(!explanation) return;
+  if(game.history().length !== plyIndex) return; // player already moved on
+  const moveLabel = document.getElementById('gradeMove');
+  if(!moveLabel || moveLabel.textContent !== mv.san) return;
+  document.getElementById('gradeText').textContent = explanation;
+}
 
 function showFeedback(grade, san, loss, playedEntry, bestEntry, preFEN, replySan){
   const meta = GRADE_META[grade];
@@ -1009,6 +1084,8 @@ function startGame(){
   game = new Chess();
   selected=null; lastMove=null; boardLocked=false;
   sessionCpLossTotal=0; sessionMovesGraded=0; sessionMoves=[];
+  currentFeedbackContext = null;
+  resetCoachChat();
   document.getElementById('feedbackCard').classList.remove('show');
   document.getElementById('resultCard').classList.remove('show');
   document.getElementById('reviewPanel').style.display='none';
@@ -1694,6 +1771,104 @@ tHaptics.addEventListener('click', ()=>{
   tHaptics.classList.toggle('on', hapticsOn);
   tHaptics.textContent = hapticsOn ? 'Haptics on' : 'Haptics off';
   if(hapticsOn) buzz([18]);
+});
+
+// LLM coach toggle: on first enable, prompts for the deployed worker's URL
+// + app token (see worker/second-board-coach/) and stores them in
+// localStorage via setLLMCoachConfig — nothing is hardcoded here since the
+// worker doesn't exist until each user deploys their own copy. Toggling
+// off just stops calling it; it doesn't clear the saved config, so
+// re-enabling later doesn't require re-entering anything.
+const tLLMCoach = document.getElementById('toggleLLMCoach');
+let llmCoachEnabled = false;
+
+function refreshLLMCoachToggle(){
+  tLLMCoach.classList.toggle('on', llmCoachEnabled);
+  tLLMCoach.textContent = llmCoachEnabled ? 'Coach: on' : 'Coach: off';
+}
+
+tLLMCoach.addEventListener('click', ()=>{
+  if(!llmCoachEnabled){
+    if(!isLLMCoachConfigured()){
+      const endpoint = prompt('LLM coach worker URL (from deploying worker/second-board-coach/):');
+      if(!endpoint) return;
+      const appToken = prompt('App token (the APP_TOKEN secret you set on that worker):');
+      if(!appToken) return;
+      setLLMCoachConfig(endpoint.trim(), appToken.trim());
+    }
+    llmCoachEnabled = true;
+  } else {
+    llmCoachEnabled = false;
+  }
+  refreshLLMCoachToggle();
+  resetCoachChat();
+});
+refreshLLMCoachToggle();
+
+/* ============================================================
+   LLM COACH CHAT — follow-up Q&A about the current mistake
+   ============================================================ */
+// Shows/hides the "Ask the coach" entry point and clears any prior
+// conversation. Called whenever the context it's scoped to changes: a new
+// graded mistake, toggling the coach on/off, or starting a new game.
+function resetCoachChat(){
+  coachChatHistory = [];
+  const log = document.getElementById('coachChatLog');
+  if(log) log.innerHTML = '';
+  const chatPanel = document.getElementById('coachChat');
+  const askBtn = document.getElementById('btnAskCoach');
+  if(chatPanel) chatPanel.style.display = 'none';
+  if(askBtn) askBtn.style.display = (llmCoachEnabled && currentFeedbackContext) ? 'block' : 'none';
+}
+
+function appendCoachChatMessage(role, text, pending){
+  const log = document.getElementById('coachChatLog');
+  if(!log) return null;
+  const div = document.createElement('div');
+  div.className = 'coach-chat-msg ' + role + (pending ? ' pending' : '');
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+  return div;
+}
+
+document.getElementById('btnAskCoach').addEventListener('click', ()=>{
+  const panel = document.getElementById('coachChat');
+  const opening = panel.style.display === 'none';
+  panel.style.display = opening ? 'block' : 'none';
+  if(opening) document.getElementById('coachChatInput').focus();
+});
+
+async function sendCoachChat(){
+  const input = document.getElementById('coachChatInput');
+  const question = input.value.trim();
+  if(!question || !currentFeedbackContext) return;
+  const sendBtn = document.getElementById('btnSendCoachChat');
+  input.value = '';
+  input.disabled = true;
+  sendBtn.disabled = true;
+
+  appendCoachChatMessage('user', question);
+  coachChatHistory.push({role:'user', content: question});
+  const pendingEl = appendCoachChatMessage('assistant', 'Thinking…', true);
+
+  const reply = await sendCoachChatMessage(currentFeedbackContext, coachChatHistory);
+  if(reply){
+    coachChatHistory.push({role:'assistant', content: reply});
+    pendingEl.textContent = reply;
+    pendingEl.classList.remove('pending');
+  } else {
+    pendingEl.textContent = "Couldn't reach the coach — check your connection or worker setup.";
+  }
+
+  input.disabled = false;
+  sendBtn.disabled = false;
+  input.focus();
+}
+
+document.getElementById('btnSendCoachChat').addEventListener('click', sendCoachChat);
+document.getElementById('coachChatInput').addEventListener('keydown', (e)=>{
+  if(e.key==='Enter') sendCoachChat();
 });
 
 // Browsers block audio until a user gesture — unlock on first tap.

@@ -3,7 +3,7 @@
 ## What this is
 A self-hosted (Netlify) chess coaching web app. Single HTML file (`chess-coach.html`, ~1,820 lines) containing all HTML/CSS/JS inline. Uses chess.js for rules/move generation and Stockfish.js (WASM, via cdnjs) as the analysis/opponent engine, with a hand-rolled minimax as a fallback if Stockfish fails to load.
 
-**Live deploy:** secondboard.netlify.app (note: an earlier deploy lived at a different auto-generated Netlify subdomain — see "Known issue: orphaned data" below)
+**Live deploy:** https://yeshuakurios.github.io/Chess-Trainer/ (GitHub Pages, auto-deploys from the `claude/chess-coach-test-harness-yfeugd` branch — confirmed via the repo's own Settings > Pages. An earlier version of this doc said Netlify; that was wrong/outdated by the time this was checked.)
 
 ## Why we're here
 This was built entirely through conversational iteration with Claude (chat), which has no ability to execute the code — every bug so far was found by the user screenshotting the live app and reporting back, not by testing before shipping. That loop is too slow and unreliable for code this stateful (async engine calls chained together, a persistence layer, a grading pipeline where bugs compound across features). The immediate ask: get this into an environment where it can actually be run and tested before each change ships.
@@ -105,6 +105,45 @@ A competitive research pass (chat conversation, not reproduced in full here — 
 - **Do not build/code without explicit go-ahead first** — this was set as a standing instruction mid-session (saved to memory). Propose the plan, wait for approval, then build.
 - User cares specifically about **user improvement** as the north star for feature tradeoffs (stated explicitly when choosing between a latency fix and a grading-accuracy fix — chose to preserve grading depth over speed).
 - User is deploying via Netlify, self-hosted, not going through app stores.
+
+## LLM coach integration (added a later session)
+Two new pieces let the app call Claude for richer, non-templated coaching:
+- `src/llm-coach.js` — client module. `explainMoveWithLLM()` upgrades a
+  graded move's feedback text once a real LLM response comes back (same
+  async-upgrade pattern as `checkOpeningBook`/`showOpeningFeedback` for
+  opening theory). `sendCoachChatMessage()` powers a small follow-up-question
+  chat scoped to the current mistake, wired into `chess-coach.html` as the
+  "Ask the coach" button under the feedback card.
+- `worker/second-board-coach/` — a Cloudflare Worker that proxies to the
+  Anthropic API. Required because this is a static GitHub Pages site with no
+  backend of its own; the API key can never live in the client bundle.
+
+**To turn this on (not enabled by default — nothing calls out to an LLM
+until this is deployed and configured):**
+1. Get an Anthropic API key from console.anthropic.com.
+2. `cd worker/second-board-coach && wrangler deploy` (needs a Cloudflare
+   account; `wrangler login` first if not already authenticated).
+3. `wrangler secret put ANTHROPIC_API_KEY` and `wrangler secret put APP_TOKEN`
+   (APP_TOKEN can be any random string, e.g. `openssl rand -hex 24` — it's a
+   casual-abuse deterrent only, not real security, since it ships in the
+   client JS; see the comment at the top of `worker/second-board-coach/index.js`
+   for why, and consider also adding a Cloudflare rate-limiting rule on the
+   route for real protection).
+4. In the live app, tap the "Coach: off" pill in the header — it prompts for
+   the deployed worker's URL and the APP_TOKEN, stores them in
+   `localStorage`, and flips the toggle on. No code changes or redeploys of
+   the site itself needed to turn it on/off or point it at a different
+   worker.
+
+**Untested against the real worker:** same caveat as `src/opening-explorer.js`
+— this sandbox's network policy blocks every third-party host, including
+`*.workers.dev` (confirmed blocked mid-session for an existing
+`anchor-visits.yeshuakurios.workers.dev` worker). Everything here is built
+and unit-tested against a mocked fetch matching the worker's own documented
+response shape (`{explanation}` for the explain mode, `{reply}` for chat).
+It fails soft (returns null, feedback stays on the rule-based text) on any
+network error, timeout, missing config, or bad response — should be
+spot-checked against the real deployed worker once reachable.
 
 ## Files in this handoff
 - `chess-coach.html` — the current full app, single file, as of this session's last edit (includes the depth/fbDepth fix, unverified in production)
