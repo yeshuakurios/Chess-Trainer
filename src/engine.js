@@ -31,10 +31,35 @@ function sfSend(cmd){
   }catch(e){ console.warn('engine send failed', e); }
 }
 
+// How long to wait for the full UCI handshake (constructor -> uciok ->
+// isready -> readyok) before giving up and falling back to the basic
+// engine. This is a ONE-TIME startup cost, not a per-move budget (each
+// individual analysis call is separately capped by sfAnalyze's own 6s
+// timeout), so it can afford to be generous: constructing the WASM module
+// involves an async compile step, and on a real phone — under load from
+// the rest of the page still loading, and possibly a slower/throttled CPU
+// than a dev machine — that compile can plausibly take longer than the 8s
+// this used to be. If startup is still silently falling back after this,
+// the next thing to check is the browser's own console for an uncaught
+// error thrown asynchronously from inside the engine bundle itself (e.g.
+// during WebAssembly instantiation) — that class of failure happens
+// outside the try/catch below entirely, since it happens after STOCKFISH()
+// has already returned.
+const ENGINE_HANDSHAKE_TIMEOUT_MS = 15000;
+
 function initEngine(){
   return new Promise((resolve)=>{
     let settled = false;
-    const done = (ok)=>{ if(!settled){ settled=true; engineReady=ok; resolve(ok); } };
+    const startedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+    const done = (ok)=>{
+      if(settled) return;
+      settled = true;
+      engineReady = ok;
+      const elapsed = Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt);
+      if(ok) console.info(`Stockfish ready after ${elapsed}ms`);
+      else console.warn(`Stockfish unavailable after ${elapsed}ms — falling back to the basic engine.`);
+      resolve(ok);
+    };
 
     try{
       if(typeof STOCKFISH === 'function'){
@@ -42,9 +67,13 @@ function initEngine(){
       } else if(typeof Stockfish === 'function'){
         sf = Stockfish();
       } else {
+        console.warn('Stockfish global (STOCKFISH/Stockfish) not found — the CDN script may not have loaded.');
         return done(false);
       }
-    }catch(e){ return done(false); }
+    }catch(e){
+      console.warn('Stockfish constructor threw:', e);
+      return done(false);
+    }
 
     const handler = (event)=>{
       const line = (typeof event === 'string') ? event : (event && event.data);
@@ -57,7 +86,7 @@ function initEngine(){
 
     sfSend('uci');
     // If the engine never answers, fall back rather than hanging forever.
-    setTimeout(()=>done(engineReady), 8000);
+    setTimeout(()=>done(engineReady), ENGINE_HANDSHAKE_TIMEOUT_MS);
   });
 }
 
